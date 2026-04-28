@@ -1,0 +1,69 @@
+# ==============================================================
+#  .gitignore
+#  Project: LangGraph HITL Chatbot
+#  Python : 3.12.7
+# ==============================================================
+
+# ── Environment variables (NEVER commit API keys) ──────────────
+.env
+.env.*
+!.env.example
+
+# ── Python cache ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# ── Virtual environments ───────────────────────────────────────
+Agent/
+venv/
+.venv/
+env/
+ENV/
+
+# ── SQLite database (conversation history) ─────────────────────
+*.db
+*.sqlite
+*.sqlite3
+chatbot.db
+
+# ── FAISS indexes (auto-regenerated on PDF upload) ─────────────
+faiss_indexes/
+
+# ── Streamlit cache ────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── VS Code settings ───────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# ── OS generated files ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Pytest / testing ───────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+*.cover
+
+# ── Jupyter notebooks (if any) ─────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Build / dist ───────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+
+# ── Logs ───────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Temporary files ────────────────────────────────────────────
+*.tmp
+*.temp
+tmp/
