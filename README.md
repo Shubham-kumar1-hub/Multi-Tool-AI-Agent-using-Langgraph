@@ -1,87 +1,209 @@
-# 🤖 Multi-Utility LangGraph Agent
+# 🤖 Multi-Utility AI Agent (LangGraph + RAG + HITL)
 
-A powerful **AI Agent built with LangGraph + LangChain + Streamlit** that supports:
+A **production-style AI agent** built using **LangGraph, LangChain, and Streamlit** that combines:
 
-* 📄 PDF-based Question Answering (RAG)
-* 📈 Real-time Stock Data
-* 🧮 Calculator
-* 🌐 Web Search
-* 🧑‍💻 Human-in-the-Loop (HITL) approvals
-* 💬 Multi-threaded conversations with persistence
+* 📄 **Document Intelligence (RAG over PDFs)**
+* 📊 **Real-time Financial Data**
+* 🧠 **Multi-step reasoning with tool usage**
+* ⏸️ **Human-in-the-Loop approvals (HITL)**
+* 💾 **Persistent memory across conversations**
+
+> 🚀 Designed to demonstrate **real-world agent architecture**, not just LLM prompts.
 
 ---
 
-## 🚀 Features
+## ✨ Why This Project Stands Out
 
-### 🧠 Intelligent Agent (LangGraph)
+Most AI chatbot projects are stateless and prompt-based.
+This project goes further:
 
-* Graph-based execution using **StateGraph**
-* Tool-calling LLM (Groq - LLaMA 3.3)
-* Stateful conversations with checkpointing
+✅ Stateful execution using LangGraph
+✅ Tool orchestration with decision-making
+✅ Safe automation using human approvals
+✅ Persistent memory with checkpointing
+✅ Hybrid intelligence (RAG + APIs + reasoning)
 
-### 📄 PDF RAG System
+👉 This mirrors how **production AI agents** are actually built.
+
+---
+
+## 🏗️ Architecture Overview
+
+```id="arch-diagram"
+                ┌───────────────────────────┐
+                │       Streamlit UI        │
+                │  (Chat + File Upload)     │
+                └────────────┬──────────────┘
+                             │
+                             ▼
+                ┌───────────────────────────┐
+                │      LangGraph Agent      │
+                │     (StateGraph Flow)     │
+                └────────────┬──────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   RAG Tool   │    │  Stock API   │    │ Web Search   │
+│ (FAISS + PDF)│    │ AlphaVantage │    │ DuckDuckGo   │
+└──────────────┘    └──────────────┘    └──────────────┘
+        │
+        ▼
+┌───────────────────────────┐
+│ Human-in-the-Loop Control │
+│ (Approve / Reject Actions)│
+└───────────────────────────┘
+        │
+        ▼
+┌───────────────────────────┐
+│ Persistent Memory (SQLite)│
+└───────────────────────────┘
+```
+
+---
+
+## 🧠 Core Capabilities
+
+### 📄 1. Document Question Answering (RAG)
 
 * Upload PDFs per chat thread
-* Chunking + embeddings using HuggingFace
-* FAISS vector store with disk persistence
-* Context-aware answers with citations
+* Automatic chunking & embedding
+* FAISS vector search with persistence
+* Returns **context + source citations**
 
-### 🛠️ Built-in Tools
+---
 
-* 🔎 DuckDuckGo Search
-* 📊 Stock Price Fetching (Alpha Vantage API)
-* 🧮 Calculator (add, sub, mul, div)
-* 💼 Buy/Sell Stocks (with approval)
-* 📚 RAG Tool for document Q&A
+### 📊 2. Financial Intelligence
 
-### ⏸️ Human-in-the-Loop (HITL)
+* Real-time stock data using Alpha Vantage
+* Buy/Sell simulation with safety checks
 
-* Required approval before:
+---
 
-  * Buying stocks
-  * Selling stocks
-* Uses LangGraph `interrupt()` mechanism
+### 🛠️ 3. Tool-Oriented Reasoning
 
-### 💬 Streamlit Chat UI
+The agent dynamically decides when to use:
 
-* Multi-chat threads
-* Persistent conversations (SQLite)
-* Real-time streaming responses
-* Tool execution visualization
-* Sidebar PDF upload per thread
+* 🔎 Web Search
+* 🧮 Calculator
+* 📊 Stock API
+* 📚 RAG Tool
+
+---
+
+### ⏸️ 4. Human-in-the-Loop (HITL)
+
+Critical actions require approval:
+
+```text
+"Approve buying 10 shares of AAPL?"
+```
+
+✔ Prevents unsafe automation
+✔ Mimics real-world AI governance systems
+
+---
+
+### 💾 5. Persistent Conversations
+
+* SQLite checkpointing via LangGraph
+* Multi-thread chat support
+* Conversations survive restarts
+
+---
+
+## 🔄 How the Agent Works
+
+1. User sends query
+2. LangGraph agent evaluates intent
+3. Decides:
+
+   * Answer directly OR
+   * Call a tool
+4. Executes tool (if needed)
+5. Returns final response
+
+---
+
+## 💬 Example Interactions
+
+### 📄 RAG Query
+
+```text
+User: Summarize the uploaded PDF
+→ Agent uses rag_tool
+→ Retrieves relevant chunks
+→ Generates contextual answer
+```
+
+---
+
+### 📊 Stock Query
+
+```text
+User: What's the price of TSLA?
+→ Calls get_stock_price
+→ Returns real-time data
+```
+
+---
+
+### 💼 Safe Trading (HITL)
+
+```text
+User: Buy 10 shares of AAPL
+→ Agent triggers purchase_stock
+→ UI asks for approval
+→ Executes only if approved
+```
+
+---
+
+### 🌐 Web Search
+
+```text
+User: Latest news about AI regulations
+→ Uses DuckDuckGo search
+→ Returns summarized results
+```
 
 ---
 
 ## 📁 Project Structure
 
-```
+```id="project-structure"
 .
-├── Agent_backend.py      # Core LangGraph agent + tools + RAG
-├── Agent_frontend.py     # Streamlit UI
+├── Agent_backend.py      # LangGraph agent, tools, RAG pipeline
+├── Agent_frontend.py     # Streamlit UI + HITL handling
 ├── requirements.txt      # Dependencies
 ├── .gitignore
-└── faiss_indexes/        # Stored vector indexes (auto-created)
+├── chatbot.db            # SQLite memory (auto-created)
+└── faiss_indexes/        # Vector DB storage (auto-created)
 ```
 
 ---
 
-## ⚙️ Installation
+## ⚙️ Setup & Installation
 
-### 1. Clone Repository
+### 1️⃣ Clone the Repo
 
 ```bash
 git clone https://github.com/Shubham-kumar1-hub/Agent-using-Langgraph.git
 cd Agent-using-Langgraph
 ```
 
-### 2. Create Virtual Environment
+---
+
+### 2️⃣ Create Virtual Environment
 
 ```bash
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+source venv/bin/activate     # Windows: venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
+---
+
+### 3️⃣ Install Dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -89,19 +211,17 @@ pip install -r requirements.txt
 
 ---
 
-## 🔑 Environment Variables
+### 4️⃣ Add Environment Variables
 
-Create a `.env` file:
+Create `.env` file:
 
 ```env
 ALPHA_VANTAGE_API_KEY=your_api_key_here
 ```
 
-⚠️ Required for stock price tool.
-
 ---
 
-## ▶️ Run the Application
+## ▶️ Run the App
 
 ```bash
 streamlit run Agent_frontend.py
@@ -109,151 +229,39 @@ streamlit run Agent_frontend.py
 
 ---
 
-## 🧠 How It Works
+## 🧩 Tech Stack
 
-### 🔹 1. LangGraph Workflow
-
-The agent is built using a **StateGraph**:
-
-```
-START → chat_node → (tools if needed) → chat_node → END
-```
-
-* `chat_node` → LLM reasoning
-* `tools` → executes selected tools
-* Conditional routing using `tools_condition`
+* **LLM**: Groq (LLaMA 3.3 70B)
+* **Frameworks**: LangChain + LangGraph
+* **UI**: Streamlit
+* **Vector DB**: FAISS
+* **Embeddings**: HuggingFace
+* **Database**: SQLite
+* **APIs**: Alpha Vantage, DuckDuckGo
 
 ---
 
-### 🔹 2. State Management
+## 🚀 What This Demonstrates
 
-```python
-class ChatState(TypedDict):
-    messages
-    thread_id
-    uploaded_filename
-    tool_call_count
-```
+This project showcases:
 
-* Prevents infinite loops
-* Maintains conversation context
+* ✅ Agent-based system design
+* ✅ Tool orchestration logic
+* ✅ RAG implementation
+* ✅ Safe AI with human control
+* ✅ Persistent conversational systems
 
----
-
-### 🔹 3. RAG Pipeline
-
-* PDF uploaded via Streamlit
-* Process:
-
-  * Load → Split → Clean → Embed → Store (FAISS)
-* Retrieval:
-
-  * MMR-based search (`k=4`)
-  * Returns page references
-
-📌 Implemented in: 
-
----
-
-### 🔹 4. Human-in-the-Loop (HITL)
-
-Certain tools pause execution:
-
-```python
-decision = interrupt("Approve buying stocks?")
-```
-
-Frontend detects this and shows:
-
-* ✅ Approve
-* ❌ Cancel
-
-Handled in: 
-
----
-
-### 🔹 5. Persistent Memory
-
-* SQLite checkpointing via LangGraph
-* Conversations survive restarts
-* Thread-based chat system
-
----
-
-## 🛠️ Available Tools
-
-| Tool                | Description           |
-| ------------------- | --------------------- |
-| `rag_tool`          | Query uploaded PDFs   |
-| `get_stock_price`   | Fetch live stock data |
-| `purchase_stock`    | Buy stocks (HITL)     |
-| `sell_stock`        | Sell stocks (HITL)    |
-| `calculator`        | Arithmetic operations |
-| `duckduckgo_search` | Web search            |
-
----
-
-## 💬 UI Features (Streamlit)
-
-* Chat interface with streaming responses
-* Sidebar:
-
-  * Thread switching
-  * PDF upload
-  * Chat history
-* Tool execution status indicators
-* HITL approval banner
-
----
-
-## 🔄 Example Flow
-
-1. User uploads PDF
-2. Asks question → RAG tool triggered
-3. Agent retrieves relevant chunks
-4. Response generated with context
-
-OR
-
-1. User asks: *“Buy 10 shares of AAPL”*
-2. Agent triggers `purchase_stock`
-3. UI asks for approval
-4. Execution resumes based on decision
-
----
-
-## 📦 Dependencies
-
-See full list here: 
-
-Key libraries:
-
-* LangGraph
-* LangChain
-* Streamlit
-* FAISS
-* HuggingFace Embeddings
-* Groq LLM
-
----
-
-## 📌 Use Cases
-
-* AI financial assistant
-* Document QA system
-* Tool-using autonomous agents
-* Multi-step reasoning workflows
-* Interactive AI dashboards
+👉 These are **core skills for real-world AI engineering roles**
 
 ---
 
 ## 🔮 Future Improvements
 
-* Add authentication
-* Deploy on cloud (Streamlit Cloud / AWS)
-* Add more tools (SQL, APIs)
-* Multi-agent collaboration
-* Voice input/output
+* 🌐 Deploy on Streamlit Cloud / AWS
+* 🔐 Add authentication system
+* 🧠 Multi-agent collaboration
+* 📊 Portfolio tracking dashboard
+* 🗂️ Multi-document retrieval
 
 ---
 
@@ -266,4 +274,11 @@ GitHub: https://github.com/Shubham-kumar1-hub
 
 ## ⭐ Support
 
-If you found this useful, consider giving it a ⭐ on GitHub!
+If you found this project useful:
+
+⭐ Star the repo
+🍴 Fork it
+📢 Share it
+
+---
+
