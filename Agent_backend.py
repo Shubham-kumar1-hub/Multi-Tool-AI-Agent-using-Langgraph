@@ -9,7 +9,7 @@ from typing import Annotated, Any, Dict, Optional, TypedDict
 
 from dotenv import load_dotenv
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.vectorstores import FAISS
@@ -52,7 +52,7 @@ _THREAD_RETRIEVERS: Dict[str, Any] = {}
 _THREAD_METADATA: Dict[str, dict] = {}
 
 
-def _get_retriever(therad_id: Optional[str]):
+def _get_retriever(thread_id: Optional[str]):
     """
     Returning the retriever for this thread.
     First checking in-memory cache; if missing, tries to load
@@ -60,15 +60,15 @@ def _get_retriever(therad_id: Optional[str]):
     survives a backend restart.
     """
 
-    if not therad_id:
+    if not thread_id:
         return None
     
     # 1. In-memory chache hit
-    if therad_id in _THREAD_RETRIEVERS:
-        return _THREAD_RETRIEVERS[therad_id]
+    if thread_id in _THREAD_RETRIEVERS:
+        return _THREAD_RETRIEVERS[thread_id]
     
     # 2. Disk fallback -> reloading persisted FAISS index
-    index_path = os.path.join(FAISS_DIR, str(therad_id))
+    index_path = os.path.join(FAISS_DIR, str(thread_id))
 
     if os.path.exists(index_path):
         try:
@@ -81,7 +81,7 @@ def _get_retriever(therad_id: Optional[str]):
                 search_type="mmr",
                 search_kwargs={"k": 4, "fetch_k": 20},
             )
-            _THREAD_RETRIEVERS[therad_id] = retriever
+            _THREAD_RETRIEVERS[thread_id] = retriever
             return retriever
         except Exception:
             pass
@@ -120,7 +120,7 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
             if text is None:
                 continue
  
-            # Removing spaces
+            # Stripping  spaces
             text = str(text).strip()
 
             # Removing null bytes and non-UTF-8 characters that break the tokenizer
@@ -440,3 +440,145 @@ def chat_node(state: ChatState, config=None):
  
  
 tool_node = ToolNode(tools)
+
+# -------------------
+# Checkpointer
+# -------------------
+ 
+conn = sqlite3.connect("chatbot.db", check_same_thread=False)
+ 
+checkpointer = SqliteSaver(conn=conn)
+ 
+# -------------------
+# Graph
+# -------------------
+ 
+graph = StateGraph(ChatState)
+ 
+graph.add_node("chat_node", chat_node)
+ 
+graph.add_node("tools", tool_node)
+ 
+graph.add_edge(START, "chat_node")
+ 
+graph.add_conditional_edges("chat_node", tools_condition)
+ 
+graph.add_edge("tools", "chat_node")
+ 
+chatbot = graph.compile(checkpointer=checkpointer)
+ 
+# -------------------
+# Helpers
+# -------------------
+ 
+ 
+def retrieve_all_threads():
+ 
+    all_threads = set()
+ 
+    for checkpoint in checkpointer.list(None):
+        all_threads.add(checkpoint.config["configurable"]["thread_id"])
+ 
+    return list(all_threads)
+ 
+ 
+def thread_has_document(thread_id: str) -> bool:
+ 
+    return str(thread_id) in _THREAD_RETRIEVERS
+ 
+ 
+def thread_document_metadata(thread_id: str) -> dict:
+ 
+    return _THREAD_METADATA.get(str(thread_id), {})
+ 
+ 
+def get_pending_interrupt(thread_id: str) -> str | None:
+    """
+    Returns the interrupt message if the thread is currently paused
+    at a human-in-the-loop checkpoint, otherwise None.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    state = chatbot.get_state(config)
+ 
+    # LangGraph stores pending interrupts in state.tasks
+    for task in state.tasks:
+        if task.interrupts:
+            return task.interrupts[0].value  # the message string from interrupt()
+    return None
+ 
+ 
+def resume_with_decision(thread_id: str, decision: str) -> dict:
+    """
+    Resume a paused graph by providing the human's decision.
+    Pass decision="yes" to approve, anything else to cancel.
+ 
+    Returns the assistant's final response messages.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+ 
+    # Command(resume=...) feeds the decision back into interrupt()
+    events = chatbot.stream(
+        Command(resume=decision),
+        config=config,
+        stream_mode="values",
+    )
+ 
+    last_state = None
+    for event in events:
+        last_state = event
+ 
+    if last_state is None:
+        return {"messages": []}
+ 
+    return last_state
+ 
+ 
+def is_thread_interrupted(thread_id: str) -> bool:
+    """
+    Quick boolean check — is this thread currently waiting for human input?
+    """
+    return get_pending_interrupt(thread_id) is not None
+ 
+ 
+def generate_thread_title(first_message: str) -> str:
+    """
+    Ask the LLM to produce a short (≤5 word) title for a new conversation
+    based on the user's first message. Falls back to a truncated snippet
+    if the LLM call fails.
+    """
+    try:
+        response = llm.invoke(
+            f"Give a concise title of at most 5 words for a conversation that starts with: "
+            f'"{first_message}". Reply with only the title, no punctuation.'
+        )
+        title = response.content.strip().strip('"').strip("'")
+        return title if title else first_message[:40]
+    except Exception:
+        return first_message[:40]
+ 
+ 
+def send_message(thread_id: str, user_input: str) -> dict:
+    """
+    Send a normal message to the chatbot (non-interrupted thread).
+    Raises RuntimeError if the thread is currently awaiting HITL approval.
+    """
+    if is_thread_interrupted(thread_id):
+        pending = get_pending_interrupt(thread_id)
+        raise RuntimeError(
+            f"Thread `{thread_id}` is awaiting human approval:\n{pending}\n"
+            "Call `resume_with_decision(thread_id, 'yes'/'no')` to continue."
+        )
+ 
+    config = {"configurable": {"thread_id": thread_id}}
+ 
+    events = chatbot.stream(
+        {"messages": [{"role": "user", "content": user_input}]},
+        config=config,
+        stream_mode="values",
+    )
+ 
+    last_state = None
+    for event in events:
+        last_state = event
+ 
+    return last_state

@@ -28,6 +28,8 @@ ENV/
 *.sqlite
 *.sqlite3
 chatbot.db
+chatbot.db-shm
+chatbot.db-wal
 
 # ── FAISS indexes (auto-regenerated on PDF upload) ─────────────
 faiss_indexes/
@@ -67,3 +69,4 @@ logs/
 *.tmp
 *.temp
 tmp/
+temp
