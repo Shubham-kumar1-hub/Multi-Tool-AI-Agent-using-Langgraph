@@ -1,6 +1,6 @@
 # Multi-Tool AI Agent with Human-in-the-Loop
 
-A stateful multi-tool AI agent built with LangGraph that combines RAG over PDFs, real-time stock data, web search, and financial transaction simulation — all with a Human-in-the-Loop approval system for sensitive actions.
+A stateful multi-tool AI agent built with LangGraph that combines RAG over PDFs, real-time stock data, web search, and financial transaction simulation all with a Human-in-the-Loop approval system for sensitive actions.
 
 [![Python](https://img.shields.io/badge/Python-3.12.7-blue)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.1.10-green)](https://github.com/langchain-ai/langgraph)
@@ -13,7 +13,7 @@ A stateful multi-tool AI agent built with LangGraph that combines RAG over PDFs,
 ## Live Demo
 
 - **App:** https://agent-using-langgraph-k5zkvjcidrcdryg9q5fxbu.streamlit.app/
-- **GitHub:** https://github.com/Shubham-kumar1-hub/Agent-using-Langgraph
+- **GitHub:** https://github.com/Shubham-kumar1-hub/Multi-Tool-AI-Agent-using-Langgraph
 
 ---
 
@@ -21,12 +21,12 @@ A stateful multi-tool AI agent built with LangGraph that combines RAG over PDFs,
 
 This project is a multi-tool conversational AI agent where the user can:
 
-- **Chat with their PDF** — upload any PDF and ask questions about it
-- **Get real-time stock prices** — fetch live data for any ticker symbol (AAPL, TSLA, etc.)
-- **Buy / Sell stocks** — simulate financial trades with human approval required before execution
-- **Search the web** — get current information via DuckDuckGo
-- **Do calculations** — arithmetic operations through a dedicated calculator tool
-- **Switch between conversations** — all chats are persisted and resumable
+- **Chat with their PDF** -> upload any PDF and ask questions about it
+- **Get real-time stock prices** -> fetch live data for any ticker symbol (AAPL, TSLA, etc.)
+- **Buy / Sell stocks** -> simulate financial trades with human approval required before execution
+- **Search the web** -> get current information via DuckDuckGo
+- **Do calculations** -> arithmetic operations through a dedicated calculator tool
+- **Switch between conversations** -> all chats are persisted and resumable
 
 ---
 
@@ -177,8 +177,8 @@ http://localhost:8501
 
 **Step 1:** Clone the repository
 ```bash
-git clone https://github.com/Shubham-kumar1-hub/Agent-using-Langgraph.git
-cd Agent-using-Langgraph
+git clone https://github.com/Shubham-kumar1-hub/Multi-Tool-AI-Agent-using-Langgraph.git
+cd Multi-Tool-AI-Agent-using-Langgraph
 ```
 
 **Step 2:** Create and activate a virtual environment
