@@ -13,7 +13,7 @@ A stateful multi-tool AI agent built with LangGraph that combines RAG over PDFs,
 ## Live Demo
 
 - **App:** https://agent-using-langgraph-k5zkvjcidrcdryg9q5fxbu.streamlit.app/
-- **GitHub:** https://github.com/Shubham-kumar1-hub/Agent-using-Langgraph
+- **GitHub:** https://github.com/Shubham-kumar1-hub/Multi-Tool-AI-Agent-using-Langgraph
 
 ---
 
