@@ -6,30 +6,27 @@
 #  with a single command instead of a long docker run command.
 # -------------------------------------------------------------
 
-version: "3.9"
-
 services:
+  postgres:
+    # PostgreSQL image that already includes the pgvector extension
+    image: pgvector/pgvector:pg16
 
-  # This is my main chatbot application
-  chatbot:
+    # A readable name for this local database container
+    container_name: multi_tool_agent_db
 
-    # Building the image from the Dockerfile in the current folder
-    build: .
-
-    # Giving the running container a friendly name
-    container_name: langgraph-hitl-chatbot
+    environment:
+      # These credentials are only for local development
+      POSTGRES_DB: multi_tool_agent
+      POSTGRES_USER: agent_user
+      POSTGRES_PASSWORD: change_me_local_only
 
     ports:
-      - "8501:8501"
+      # Your Python app will connect to localhost:5432
+      - "5433:5432"
 
-    # Format: ./local-folder:/app/folder-inside-container
     volumes:
-      # FAISS indexes — PDF vector stores persist across restarts
-      - ./faiss_indexes:/app/faiss_indexes
-      # SQLite database — conversation history persists across restarts
-      - ./chatbot.db:/app/chatbot.db
+      # Keeps database data even after Docker restarts
+      - postgres_data:/var/lib/postgresql/data
 
-    env_file:
-      - .env
-
-    restart: unless-stopped
+volumes:
+  postgres_data:

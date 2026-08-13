@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import tempfile
 import requests
+
+from psycopg import connect
+from psycopg.rows import dict_row
+
 
 from typing import Annotated, Any, Dict, Optional, TypedDict
 
@@ -18,7 +21,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -36,6 +39,7 @@ llm = ChatGroq(
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
+
 
 # -------------------
 # FAISS persistence
@@ -448,10 +452,23 @@ tool_node = ToolNode(tools)
 # -------------------
 # Checkpointer
 # -------------------
+
+# Reads the connection URL from .env.
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is missing from your .env file.")
  
-conn = sqlite3.connect("chatbot.db", check_same_thread=False)
- 
-checkpointer = SqliteSaver(conn=conn)
+conn = connect(
+    DATABASE_URL,
+    autocommit=True,
+    row_factory=dict_row,
+)
+
+checkpointer = PostgresSaver(conn)
+
+# Creates the checkpoint tables (checkpoints, checkpoint_writes, etc.) 
+checkpointer.setup()
  
 # -------------------
 # Graph

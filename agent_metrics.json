@@ -1,0 +1,12 @@
+{
+    "total_messages": 7,
+    "average_response_time": 1.56,
+    "tool_usage": {
+        "total_tool_calls": 4,
+        "rag_calls": 0,
+        "stock_calls": 2,
+        "calculator_calls": 0,
+        "search_calls": 2
+    },
+    "thread_metadata": {}
+}
