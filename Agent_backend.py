@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 import os
 import tempfile
 import requests
@@ -15,17 +17,21 @@ from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.tools import DuckDuckGoSearchRun
-from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
+from langchain_postgres import PGEngine, PGVectorStore
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.types import interrupt, Command
+
+# Psycopg async connections need this event loop on Windows.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 load_dotenv()
 
@@ -42,55 +48,62 @@ embeddings = HuggingFaceEmbeddings(
 
 
 # -------------------
-# FAISS persistence
+# pgvector PDF retriever store
 # -------------------
- 
-FAISS_DIR = "faiss_indexes"
-os.makedirs(FAISS_DIR, exist_ok=True)
 
-# -------------------
-# PDF retriever store
-# -------------------
- 
-_THREAD_RETRIEVERS: Dict[str, Any] = {}
+VECTOR_TABLE_NAME = "document_chunks"
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is missing from your .env file.")
+
+if DATABASE_URL.startswith("postgresql://"):
+    SQLALCHEMY_DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://",
+        "postgresql+psycopg://",
+        1,
+    )
+else:
+    raise RuntimeError(
+        "DATABASE_URL must start with postgresql://"
+    )
+
+# Creates a reusable PostgreSQL connection pool for vector operations.
+pg_engine = PGEngine.from_connection_string(
+    url=SQLALCHEMY_DATABASE_URL
+)
+
+pdf_vector_store = PGVectorStore.create_sync(
+    engine=pg_engine,
+    table_name=VECTOR_TABLE_NAME,
+    embedding_service=embeddings,
+    metadata_columns=["thread_id"],
+)
+
 _THREAD_METADATA: Dict[str, dict] = {}
-
 
 def _get_retriever(thread_id: Optional[str]):
     """
-    Returning the retriever for this thread.
-    First checking in-memory cache; if missing, tries to load
-    the persisted FAISS index from disk so the retriever
-    survives a backend restart.
+    Return a retriever that searches only inside this chat thread's PDF chunks.
+
+    This preserves MMR retrieval settings:
+    - return 4 final chunks
+    - fetch 20 candidate chunks for diverse results 
     """
 
     if not thread_id:
         return None
-    
-    # 1. In-memory chache hit
-    if thread_id in _THREAD_RETRIEVERS:
-        return _THREAD_RETRIEVERS[thread_id]
-    
-    # 2. Disk fallback -> reloading persisted FAISS index
-    index_path = os.path.join(FAISS_DIR, str(thread_id))
 
-    if os.path.exists(index_path):
-        try:
-            vector_store = FAISS.load_local(
-                index_path,
-                embeddings,
-                allow_dangerous_deserialization=True,
-            )
-            retriever = vector_store.as_retriever(
-                search_type="mmr",
-                search_kwargs={"k": 4, "fetch_k": 20},
-            )
-            _THREAD_RETRIEVERS[thread_id] = retriever
-            return retriever
-        except Exception:
-            pass
+    return pdf_vector_store.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": 4,
+            "fetch_k": 20,
+            "filter": {"thread_id": str(thread_id)},
+        },
+    )
 
-    return None
 
 def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None):
 
@@ -138,29 +151,30 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
                 continue
  
             texts.append(text)
-            metadatas.append(doc.metadata)
+            # Keep page metadata and attach this chunk to the current chat thread.
+            chunk_metadata = dict(doc.metadata)
+            chunk_metadata["thread_id"] = str(thread_id)
+            chunk_metadata["source_file"] = filename or os.path.basename(temp_path)
+
+            metadatas.append(chunk_metadata)
  
         if len(texts) == 0:
             raise ValueError("No valid text extracted from the PDF")
         
-        # ---------- VECTOR STORE ----------
-        vector_store = FAISS.from_texts(
+        # ---------- PGVECTOR STORE ----------
+
+        thread_key = str(thread_id)
+
+
+        pdf_vector_store.delete(
+            filter={"thread_id": thread_key}
+        )
+ 
+        # Embeds the chunks and stores them permanently in PostgreSQL + pgvector.
+        pdf_vector_store.add_texts(
             texts=texts,
-            embedding=embeddings,
             metadatas=metadatas,
         )
- 
-        # Saving FAISS index to disk so it survives restarts
-        index_path = os.path.join(FAISS_DIR, str(thread_id))
-        vector_store.save_local(index_path)
- 
-        # Using MMR retrieval for diverse, non-redundant chunks
-        retriever = vector_store.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": 4, "fetch_k": 20},
-        )
- 
-        _THREAD_RETRIEVERS[str(thread_id)] = retriever
  
         _THREAD_METADATA[str(thread_id)] = {
             "filename": filename or os.path.basename(temp_path),
@@ -505,7 +519,14 @@ def retrieve_all_threads():
  
 def thread_has_document(thread_id: str) -> bool:
  
-    return str(thread_id) in _THREAD_RETRIEVERS
+    """Return True when PostgreSQL contains at least one chunk for this thread."""
+
+    stored_chunks= pdf_vector_store.get(
+        where={"thread_id": str(thread_id)},
+        limit=1,
+    )
+
+    return bool(stored_chunks.get("ids"))
  
  
 def thread_document_metadata(thread_id: str) -> dict:
