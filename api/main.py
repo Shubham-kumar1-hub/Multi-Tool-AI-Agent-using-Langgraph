@@ -8,12 +8,26 @@ from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
 
+from datetime import datetime, timedelta, timezone
+
+import jwt
+
 load_dotenv()  # Load environment variables from .env file
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set.")
+
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15")
+)
+
+if not JWT_SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY is missing from .env.")
+
 
 
 # Argon2 hashes passwords securely; passwords are never stored directly.
@@ -31,6 +45,41 @@ class RegisterRequest(BaseModel):
     email: EmailStr = Field(..., description="The user's email address.")
 
     password: str = Field(min_length=8, max_length=128, description="The user's password.")
+
+
+class LoginRequest(BaseModel):
+    """The data users sends when logging in."""
+
+    email: EmailStr
+    password: str
+
+class TokenResponse(BaseModel):
+    """The JWT returned after successful login."""
+
+    access_token: str
+    token_type: str = "bearer"
+
+def create_access_token(user_id: str, email: str) -> str:
+    """
+    Create a signed JWT that expires after the configured number of minutes.
+
+    `sub` means subject, which identifies the logged-in user.
+    """
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+    )
+
+    token_payload = {
+        "sub": user_id,
+        "email": email,
+        "exp": expires_at,
+    }
+
+    return jwt.encode(
+        token_payload,
+        JWT_SECRET_KEY,
+        algorithm=JWT_ALGORITHM,
+    )
 
 
 @app.get("/health")
