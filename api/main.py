@@ -137,3 +137,55 @@ def register_user(payload: RegisterRequest):
             "email": email,
         },
     }
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login_user(payload: LoginRequest):
+    """
+    Authenticate a user and return a JWT for future requests.
+
+    The JWT is signed with a secret key and expires after a configured number of minutes.
+    """
+
+    email = payload.email.lower().strip()
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, password_hash, is_active
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            user = cursor.fetchone()
+
+
+    # This prevents attackers from discovering registered email addresses.
+    if user is None or not password_hasher.verify(
+        payload.password,
+        user[1],
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+        )
+
+    user_id, _, is_active = user
+
+    if not is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated.",
+        )
+
+    access_token = create_access_token(
+        user_id=str(user_id),
+        email=email,
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
