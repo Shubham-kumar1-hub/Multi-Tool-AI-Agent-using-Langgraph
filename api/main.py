@@ -3,7 +3,10 @@ from uuid import uuid4
 
 import psycopg
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
@@ -80,6 +83,68 @@ def create_access_token(user_id: str, email: str) -> str:
         JWT_SECRET_KEY,
         algorithm=JWT_ALGORITHM,
     )
+
+# Reads the Authorization: Bearer <token> header.
+# auto_error=False lets us return a clear 401 response ourselves.
+bearer_scheme = HTTPBearer(auto_error=False)
+
+def get_current_user(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict:
+    """
+    Verify the JWT and return the active user from PostgreSQL.
+
+    Every future protected API route will use this function.
+    """
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token is  required.",
+        )
+
+    try:
+        # Verify the JWT signature and expiration.
+        token_payload = jwt.decode(
+            credentials.credentials,
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+        )
+
+        user_id = token_payload.get("sub")
+
+        if not user_id:
+            raise ValueError("JWT is missing the user ID")
+
+    except (jwt.InvalidTokenError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired authentication token.",
+        )
+
+    # verifying that the user still exists and is active in the database.
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """ 
+                SELECT id, email, is_active
+                FROM users
+                WHERE id = %s
+                """,
+                (user_id,),
+            )
+            user = cursor.fetchone()
+
+    if user is None or not user[2]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is inactive or does not exist.",
+        )
+
+    return {
+        "id": str(user[0]),
+        "email": user[1],
+    }
 
 
 @app.get("/health")
@@ -189,3 +254,14 @@ def login_user(payload: LoginRequest):
         "token_type": "bearer",
     }
 
+
+@app.get("/auth/me")
+def get_my_profile(current_user: dict = Depends(get_current_user)):
+    """
+    Returns the current user only when a valid Bearer JWT is supplied.
+    """
+
+    return {
+        "message": "JWT verification succeeded.",
+        "user": current_user,
+    }
