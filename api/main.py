@@ -62,6 +62,22 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
+class CreateThreadRequest(BaseModel):
+    """Optional title supplied when a chat thread is created."""
+
+    title: str | None = Field(
+        default=None,
+        max_length=120,
+    )
+
+class ThreadResponse(BaseModel):
+    """Safe thread information returned to the frontend."""
+
+    thread_id: str
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+
 def create_access_token(user_id: str, email: str) -> str:
     """
     Create a signed JWT that expires after the configured number of minutes.
@@ -265,3 +281,80 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
         "message": "JWT verification succeeded.",
         "user": current_user,
     }
+
+@app.post(
+    "/threads",
+    response_model=ThreadResponse,
+    status_code=status.HTTP_201_CREATED
+)
+def create_thread(
+    payload: CreateThreadRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Create a new chat thread for the logged-in user.
+
+    The returned thread_id will later be passed unchanged to LangGraph
+    """
+
+    thread_id = uuid4()
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO app_threads (thread_id, user_id, title)
+                VALUES (%s, %s, %s)
+                RETURNING thread_id, title, created_at, updated_at
+                """,
+                (
+                    thread_id,
+                    current_user["id"],
+                    payload.title,
+                ),
+            )
+            created_thread = cursor.fetchone()
+
+        conn.commit()
+
+    return {
+        "thread_id": str(created_thread[0]),
+        "title": created_thread[1],
+        "created_at": created_thread[2],
+        "updated_at": created_thread[3],
+    }
+
+@app.get("/threads", response_model=list[ThreadResponse])
+def list_my_threads(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Return only threads owned by the authenticated user.
+
+    This is the core authorization rule that prevents users from
+    seeing each other's conversations.
+    """
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT thread_id, title, created_at, updated_at
+                FROM app_threads
+                WHERE user_id = %s
+                ORDER BY updated_at DESC
+                """,
+                (current_user["id"],),
+            )
+            threads = cursor.fetchall()
+
+    return [
+        {
+            "thread_id": str(thread[0]),
+            "title": thread[1],
+            "created_at": thread[2],
+            "updated_at": thread[3],
+        }
+        for thread in threads
+    ]
+   
