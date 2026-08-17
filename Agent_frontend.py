@@ -1,318 +1,647 @@
-import uuid
-from datetime import datetime
+# Agent_frontend.py
+# Streamlit UI that talks only to protected FastAPI routes.
 
+
+import json
+import os
+
+import requests
 import streamlit as st
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from Agent_backend import (
-    chatbot,
-    ingest_pdf,
-    retrieve_all_threads,
-    thread_document_metadata,
-    generate_thread_title,
-    # -- HITL helpers --
-    is_thread_interrupted,
-    get_pending_interrupt,
-    resume_with_decision,
+API_BASE_URL = os.getenv(
+    "API_BASE_URL",
+    "http://127.0.0.1:8000",
 )
 
 
-# ---------------------- Utilities ----------------------
+# ----------------------
+# Authentication helpers
+# ----------------------
 
-def generate_thread_id() -> uuid.UUID:
-    return uuid.uuid4()
+def clear_authentication():
+    """Removing tokens and all user-specific UI state."""
 
-
-def reset_chat():
-    thread_id = generate_thread_id()
-    st.session_state["thread_id"] = thread_id
-    _register_thread(thread_id, title=None)
-    st.session_state["message_history"] = []
-
-
-def _register_thread(thread_id: uuid.UUID, title: str | None = None):
-    """Add a thread to the sidebar list if not already present."""
-    tid = str(thread_id)
-    if tid not in st.session_state["thread_titles"]:
-        label = title or f"Chat · {datetime.now().strftime('%b %d %H:%M')} · {tid[:8]}…"
-        st.session_state["thread_titles"][tid] = label
-
-    if thread_id not in st.session_state["chat_threads"]:
-        st.session_state["chat_threads"].append(thread_id)
+    for key in [
+        "access_token",
+        "refresh_token",
+        "current_user",
+        "thread_id",
+        "message_history",
+        "awaiting_approval",
+        "pending_interrupt_msg",
+        "uploaded_files",
+    ]:
+        st.session_state.pop(key, None)
 
 
-def load_conversation(thread_id: uuid.UUID) -> list:
-    state = chatbot.get_state(config={"configurable": {"thread_id": str(thread_id)}})
-    return state.values.get("messages", [])
+def refresh_access_token() -> bool:
+    """
+    Exchanging a valid refresh token for a new short-lived access token.
+    """
+
+    refresh_token = st.session_state.get("refresh_token")
+
+    if not refresh_token:
+        return False
+
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/auth/refresh",
+            json={"refresh_token": refresh_token},
+            timeout=20,
+        )
+
+        if response.status_code != 200:
+            clear_authentication()
+            return False
+
+        tokens = response.json()
+
+        st.session_state["access_token"] = tokens["access_token"]
+        st.session_state["refresh_token"] = tokens["refresh_token"]
+
+        return True
+
+    except requests.RequestException:
+        return False
 
 
-# ---------------------- Session Initialization ----------------------
+def api_request(
+    method: str,
+    path: str,
+    *,
+    retry_after_refresh: bool = True,
+    **kwargs,
+) -> requests.Response:
+    """
+    Making an authenticated FastAPI request.
+
+    If the 15-minute access token expired, refresh it once automatically.
+    """
+
+    access_token = st.session_state.get("access_token")
+
+    headers = kwargs.pop("headers", {})
+    headers["Authorization"] = f"Bearer {access_token}"
+
+    response = requests.request(
+        method,
+        f"{API_BASE_URL}{path}",
+        headers=headers,
+        timeout=60,
+        **kwargs,
+    )
+
+    if (
+        response.status_code == 401
+        and retry_after_refresh
+        and refresh_access_token()
+    ):
+        headers["Authorization"] = (
+            f"Bearer {st.session_state['access_token']}"
+        )
+
+        response = requests.request(
+            method,
+            f"{API_BASE_URL}{path}",
+            headers=headers,
+            timeout=60,
+            **kwargs,
+        )
+
+    return response
+
+
+def show_authentication_page():
+    """Display login and registration forms until the user authenticates."""
+
+    st.title("Multi Utility Chatbot")
+    st.caption("Sign in to access your private chats and PDFs.")
+
+    login_tab, register_tab = st.tabs(["Login", "Create account"])
+
+    with login_tab:
+        with st.form("login_form"):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input(
+                "Password",
+                type="password",
+                key="login_password",
+            )
+            login_clicked = st.form_submit_button("Login")
+
+        if login_clicked:
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/auth/login",
+                    json={
+                        "email": email,
+                        "password": password,
+                    },
+                    timeout=20,
+                )
+
+                if response.status_code != 200:
+                    st.error(
+                        response.json().get(
+                            "detail",
+                            "Login failed.",
+                        )
+                    )
+                else:
+                    tokens = response.json()
+
+                    st.session_state["access_token"] = (
+                        tokens["access_token"]
+                    )
+                    st.session_state["refresh_token"] = (
+                        tokens["refresh_token"]
+                    )
+
+                    profile_response = api_request("GET", "/auth/me")
+
+                    if profile_response.status_code == 200:
+                        st.session_state["current_user"] = (
+                            profile_response.json()["user"]
+                        )
+                        st.rerun()
+                    else:
+                        st.error("Could not load your profile.")
+
+            except requests.RequestException:
+                st.error(
+                    "Cannot connect to FastAPI. "
+                    "Make sure uvicorn is running."
+                )
+
+    with register_tab:
+        with st.form("register_form"):
+            email = st.text_input("Email", key="register_email")
+            password = st.text_input(
+                "Password",
+                type="password",
+                key="register_password",
+            )
+            register_clicked = st.form_submit_button("Create account")
+
+        if register_clicked:
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/auth/register",
+                    json={
+                        "email": email,
+                        "password": password,
+                    },
+                    timeout=20,
+                )
+
+                if response.status_code == 201:
+                    st.success(
+                        "Account created. You can now log in."
+                    )
+                else:
+                    st.error(
+                        response.json().get(
+                            "detail",
+                            "Could not create account.",
+                        )
+                    )
+
+            except requests.RequestException:
+                st.error(
+                    "Cannot connect to FastAPI. "
+                    "Make sure uvicorn is running."
+                )
+
+
+# ----------------------
+# Thread API helpers
+# ----------------------
+
+def get_threads() -> list[dict]:
+    """Load only the authenticated user's threads."""
+
+    response = api_request("GET", "/threads")
+
+    if response.status_code == 200:
+        return response.json()
+
+    return []
+
+
+def create_thread() -> str | None:
+    """Create a JWT-owned thread ID through FastAPI."""
+
+    response = api_request(
+        "POST",
+        "/threads",
+        json={"title": None},
+    )
+
+    if response.status_code == 201:
+        return response.json()["thread_id"]
+
+    st.error("Could not create a new chat.")
+    return None
+
+
+def load_conversation(thread_id: str):
+    """Load messages and approval state for an owned thread."""
+
+    response = api_request(
+        "GET",
+        f"/threads/{thread_id}/messages",
+    )
+
+    if response.status_code != 200:
+        st.error("Could not load this chat.")
+        return
+
+    conversation = response.json()
+
+    st.session_state["message_history"] = (
+        conversation["messages"]
+    )
+    st.session_state["awaiting_approval"] = bool(
+        conversation["pending_interrupt"]
+    )
+    st.session_state["pending_interrupt_msg"] = (
+        conversation["pending_interrupt"]
+    )
+
+
+def ensure_current_thread(threads: list[dict]):
+    """Create a first chat or select a valid existing chat."""
+
+    known_thread_ids = {
+        thread["thread_id"]
+        for thread in threads
+    }
+
+    current_thread = st.session_state.get("thread_id")
+
+    if current_thread not in known_thread_ids:
+        new_thread_id = create_thread()
+
+        if new_thread_id:
+            st.session_state["thread_id"] = new_thread_id
+            st.session_state["message_history"] = []
+            st.session_state["awaiting_approval"] = False
+            st.session_state["pending_interrupt_msg"] = None
+            st.session_state["uploaded_files"] = {}
+
+
+def stream_agent_reply(thread_id: str, user_input: str):
+    """
+    Read FastAPI Server-Sent Events and yield only AI text to Streamlit.
+    """
+
+    url = f"{API_BASE_URL}/threads/{thread_id}/chat/stream"
+
+    headers = {
+        "Authorization": (
+            f"Bearer {st.session_state['access_token']}"
+        ),
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json={"message": user_input},
+        stream=True,
+        timeout=120,
+    )
+
+    # Retry one time if the access token expired.
+    if response.status_code == 401 and refresh_access_token():
+        headers["Authorization"] = (
+            f"Bearer {st.session_state['access_token']}"
+        )
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json={"message": user_input},
+            stream=True,
+            timeout=120,
+        )
+
+    if response.status_code != 200:
+        message = "Could not contact the agent."
+
+        try:
+            message = response.json().get("detail", message)
+        except ValueError:
+            pass
+
+        st.error(message)
+        return
+
+    current_event = ""
+
+    for raw_line in response.iter_lines(decode_unicode=True):
+        if not raw_line:
+            continue
+
+        if raw_line.startswith("event:"):
+            current_event = raw_line.removeprefix(
+                "event:"
+            ).strip()
+            continue
+
+        if not raw_line.startswith("data:"):
+            continue
+
+        payload = json.loads(
+            raw_line.removeprefix("data:").strip()
+        )
+
+        if current_event == "token":
+            yield payload["text"]
+
+        elif current_event == "tool":
+            st.session_state["message_history"].append(
+                {
+                    "role": "tool",
+                    "content": payload["content"],
+                }
+            )
+
+        elif current_event == "interrupt":
+            st.session_state["awaiting_approval"] = True
+            st.session_state["pending_interrupt_msg"] = (
+                payload["message"]
+            )
+
+        elif current_event == "error":
+            st.error(payload["message"])
+
+
+# ----------------------
+# Session initialization
+# ----------------------
+
+if "access_token" not in st.session_state:
+    st.session_state["access_token"] = None
+
+if "refresh_token" not in st.session_state:
+    st.session_state["refresh_token"] = None
 
 if "message_history" not in st.session_state:
     st.session_state["message_history"] = []
 
-if "thread_id" not in st.session_state:
-    st.session_state["thread_id"] = generate_thread_id()
-
-if "chat_threads" not in st.session_state:
-    existing = retrieve_all_threads()
-    st.session_state["chat_threads"] = [uuid.UUID(t) if isinstance(t, str) else t for t in existing]
-
-if "thread_titles" not in st.session_state:
-    # Build display labels for pre-existing threads
-    st.session_state["thread_titles"] = {
-        str(t): f"Chat · {str(t)[:8]}…"
-        for t in st.session_state["chat_threads"]
-    }
-
-if "ingested_docs" not in st.session_state:
-    st.session_state["ingested_docs"] = {}
-
-# Track whether we are awaiting HITL approval
 if "awaiting_approval" not in st.session_state:
     st.session_state["awaiting_approval"] = False
 
 if "pending_interrupt_msg" not in st.session_state:
     st.session_state["pending_interrupt_msg"] = None
 
-# Tracking whether a title has been generated for the current thread
-if "title_generated" not in st.session_state:
-    st.session_state["title_generated"] = set()
+if "uploaded_files" not in st.session_state:
+    st.session_state["uploaded_files"] = {}
 
-_register_thread(st.session_state["thread_id"])
+# Stop before rendering the chat if no user is authenticated.
+if not st.session_state["access_token"]:
+    show_authentication_page()
+    st.stop()
 
-thread_key = str(st.session_state["thread_id"])
-thread_docs = st.session_state["ingested_docs"].setdefault(thread_key, {})
-threads = st.session_state["chat_threads"][::-1]
-selected_thread = None
+# Verify the current token and load profile after a page refresh.
+if "current_user" not in st.session_state:
+    profile_response = api_request("GET", "/auth/me")
 
-# ------------------------- Sidebar -------------------------
+    if profile_response.status_code != 200:
+        clear_authentication()
+        st.rerun()
+
+    st.session_state["current_user"] = (
+        profile_response.json()["user"]
+    )
+
+# ----------------------
+# Load private chat state
+# ----------------------
+
+threads = get_threads()
+ensure_current_thread(threads)
+
+thread_id = st.session_state.get("thread_id")
+
+if not thread_id:
+    st.error("Could not create a chat thread.")
+    st.stop()
+
+# Load messages only when entering a different thread or first loading.
+if st.session_state.get("loaded_thread_id") != thread_id:
+    load_conversation(thread_id)
+    st.session_state["loaded_thread_id"] = thread_id
+
+# ----------------------
+# Sidebar
+# ----------------------
+
 st.sidebar.title("LangGraph PDF Chatbot")
-st.sidebar.markdown(f"**Thread ID:** `{thread_key}`")
+st.sidebar.caption(
+    f"Signed in as `{st.session_state['current_user']['email']}`"
+)
+st.sidebar.markdown(f"**Thread ID:** `{thread_id}`")
+
+if st.sidebar.button("Logout", use_container_width=True):
+    # Revoke the current refresh token, then clear UI state.
+    try:
+        api_request(
+            "POST",
+            "/auth/logout",
+            retry_after_refresh=False,
+            json={
+                "refresh_token": (
+                    st.session_state["refresh_token"]
+                )
+            },
+        )
+    finally:
+        clear_authentication()
+        st.rerun()
 
 if st.sidebar.button("New Chat", use_container_width=True):
-    reset_chat()
-    st.rerun()
+    new_thread_id = create_thread()
 
-if thread_docs:
-    latest_doc = list(thread_docs.values())[-1]
-    st.sidebar.success(
-        f"Using `{latest_doc.get('filename')}` "
-        f"({latest_doc.get('chunks')} chunks from {latest_doc.get('documents')} pages)"
-    )
-else:
-    st.sidebar.info("No PDF indexed yet.")
+    if new_thread_id:
+        st.session_state["thread_id"] = new_thread_id
+        st.session_state["loaded_thread_id"] = None
+        st.session_state["message_history"] = []
+        st.session_state["awaiting_approval"] = False
+        st.session_state["pending_interrupt_msg"] = None
+        st.session_state["uploaded_files"] = {}
+        st.rerun()
 
-uploaded_pdf = st.sidebar.file_uploader("Upload a PDF for this chat", type=["pdf"])
-if uploaded_pdf:
-    if uploaded_pdf.name in thread_docs:
-        st.sidebar.info(f"`{uploaded_pdf.name}` already processed for this chat.")
-    else:
-        with st.sidebar.status("Indexing PDF…", expanded=True) as status_box:
-            summary = ingest_pdf(
-                uploaded_pdf.getvalue(),
-                thread_id=thread_key,
-                filename=uploaded_pdf.name,
+uploaded_pdf = st.sidebar.file_uploader(
+    "Upload a PDF for this chat",
+    type=["pdf"],
+)
+
+uploaded_files = st.session_state["uploaded_files"].setdefault(
+    thread_id,
+    set(),
+)
+
+if uploaded_pdf and uploaded_pdf.name not in uploaded_files:
+    with st.sidebar.status("Indexing PDF…", expanded=True) as status_box:
+        response = api_request(
+            "POST",
+            f"/threads/{thread_id}/documents",
+            files={
+                "file": (
+                    uploaded_pdf.name,
+                    uploaded_pdf.getvalue(),
+                    "application/pdf",
+                )
+            },
+        )
+
+        if response.status_code == 200:
+            document = response.json()["document"]
+
+            uploaded_files.add(uploaded_pdf.name)
+
+            status_box.update(
+                label=(
+                    f"Indexed `{document['filename']}` "
+                    f"({document['chunks']} chunks)"
+                ),
+                state="complete",
+                expanded=False,
             )
-            thread_docs[uploaded_pdf.name] = summary
-            status_box.update(label=" PDF indexed", state="complete", expanded=False)
+        else:
+            status_box.update(
+                label="PDF indexing failed",
+                state="error",
+                expanded=False,
+            )
+            st.sidebar.error(
+                response.json().get(
+                    "detail",
+                    "Could not index the PDF.",
+                )
+            )
 
 st.sidebar.subheader("Past conversations")
-if not threads:
-    st.sidebar.write("No past conversations yet.")
-else:
-    for thread_id in threads:
-        tid = str(thread_id)
-        label = st.session_state["thread_titles"].get(tid, f"Chat · {tid[:8]}…")
-        if st.sidebar.button(label, key=f"side-thread-{tid}"):
-            selected_thread = thread_id
 
-# ------------------------- Main Layout -------------------------
+for thread in threads:
+    selected_thread_id = thread["thread_id"]
+    label = (
+        thread["title"]
+        or f"Chat · {selected_thread_id[:8]}…"
+    )
+
+    if st.sidebar.button(
+        label,
+        key=f"thread-{selected_thread_id}",
+    ):
+        st.session_state["thread_id"] = selected_thread_id
+        st.session_state["loaded_thread_id"] = None
+        st.rerun()
+
+# ----------------------
+# Chat display
+# ----------------------
+
 st.title("Multi Utility Chatbot")
 
-# Render chat history
 for message in st.session_state["message_history"]:
-    role = message["role"]
-    content = message["content"]
-    if role == "tool":
-        # Render tool messages as a collapsed info block
-        with st.expander(f" Tool result", expanded=False):
-            st.text(content)
+    if message["role"] == "tool":
+        with st.expander("Tool result", expanded=False):
+            st.text(message["content"])
     else:
-        with st.chat_message(role):
-            st.text(content)
+        with st.chat_message(message["role"]):
+            st.text(message["content"])
 
-# ---------------------------------------------------------------
-#  HITL APPROVAL BANNER
-#  Shown whenever the graph is paused waiting for human approval.
-#  Sync session state with actual graph state on every render so
-#  the banner persists even after a page re-run.
-# ---------------------------------------------------------------
-if is_thread_interrupted(thread_key):
-    st.session_state["awaiting_approval"] = True
-    st.session_state["pending_interrupt_msg"] = get_pending_interrupt(thread_key)
+# ----------------------
+# Human approval controls
+# ----------------------
 
 if st.session_state["awaiting_approval"]:
-    interrupt_msg = st.session_state["pending_interrupt_msg"] or "Approval required."
+    interrupt_message = (
+        st.session_state["pending_interrupt_msg"]
+        or "Approval required."
+    )
 
-    st.warning(f"⏸️ **Action requires your approval**\n\n> {interrupt_msg}")
+    st.warning(
+        f"⏸️ **Action requires your approval**\n\n"
+        f"> {interrupt_message}"
+    )
 
-    col_yes, col_no = st.columns(2)
+    yes_column, no_column = st.columns(2)
 
-    with col_yes:
-        if st.button(" Yes, approve", use_container_width=True, type="primary"):
-            with st.spinner("Resuming…"):
-                try:
-                    final_state = resume_with_decision(thread_key, "yes")
-                    ai_reply = ""
-                    for msg in reversed(final_state.get("messages", [])):
-                        if isinstance(msg, AIMessage) and msg.content:
-                            ai_reply = msg.content
-                            break
-                    st.session_state["message_history"].append(
-                        {"role": "assistant", "content": ai_reply}
+    for decision, column, label, button_type in [
+        ("yes", yes_column, "Yes, approve", "primary"),
+        ("no", no_column, "No, cancel", "secondary"),
+    ]:
+        with column:
+            if st.button(
+                label,
+                use_container_width=True,
+                type=button_type,
+            ):
+                with st.spinner("Resuming…"):
+                    response = api_request(
+                        "POST",
+                        f"/threads/{thread_id}/approval",
+                        json={"decision": decision},
                     )
-                except Exception as e:
-                    st.error(f"Error resuming conversation: {e}")
 
-            # Clear HITL flags
-            st.session_state["awaiting_approval"] = False
-            st.session_state["pending_interrupt_msg"] = None
-            st.rerun()
+                if response.status_code == 200:
+                    conversation = response.json()
 
-    with col_no:
-        if st.button(" No, cancel", use_container_width=True):
-            with st.spinner("Cancelling…"):
-                try:
-                    final_state = resume_with_decision(thread_key, "no")
-                    ai_reply = ""
-                    for msg in reversed(final_state.get("messages", [])):
-                        if isinstance(msg, AIMessage) and msg.content:
-                            ai_reply = msg.content
-                            break
-                    st.session_state["message_history"].append(
-                        {"role": "assistant", "content": ai_reply}
+                    st.session_state["message_history"] = (
+                        conversation["messages"]
                     )
-                except Exception as e:
-                    st.error(f"Error cancelling: {e}")
+                    st.session_state["awaiting_approval"] = bool(
+                        conversation["pending_interrupt"]
+                    )
+                    st.session_state["pending_interrupt_msg"] = (
+                        conversation["pending_interrupt"]
+                    )
+                    st.rerun()
 
-            # Clear HITL flags
-            st.session_state["awaiting_approval"] = False
-            st.session_state["pending_interrupt_msg"] = None
-            st.rerun()
+                st.error(
+                    response.json().get(
+                        "detail",
+                        "Could not resume the chat.",
+                    )
+                )
 
-# ----------------------------------------------------------------
-#  CHAT INPUT  (disabled while awaiting approval)
-# -----------------------------------------------------------------
+# ----------------------
+# Chat input
+# ----------------------
+
 user_input = st.chat_input(
     "Ask about your document or use tools",
     disabled=st.session_state["awaiting_approval"],
 )
 
 if user_input and not st.session_state["awaiting_approval"]:
-    st.session_state["message_history"].append({"role": "user", "content": user_input})
+    st.session_state["message_history"].append(
+        {
+            "role": "user",
+            "content": user_input,
+        }
+    )
+
     with st.chat_message("user"):
         st.text(user_input)
 
-    # Generate a human readable thread title from the first message
-    if thread_key not in st.session_state["title_generated"]:
-        with st.spinner("Naming conversation…"):
-            try:
-                title = generate_thread_title(user_input)
-                st.session_state["thread_titles"][thread_key] = title
-                st.session_state["title_generated"].add(thread_key)
-            except Exception:
-                pass  # title stays as default; non critical
-
-    CONFIG = {
-        "configurable": {"thread_id": thread_key},
-        "metadata": {"thread_id": thread_key},
-        "run_name": "chat_turn",
-    }
-
     with st.chat_message("assistant"):
-        status_holder = {"box": None}
-        hit_interrupt = {"value": False}
-
-        def ai_only_stream():
-            try:
-                for message_chunk, _ in chatbot.stream(
-                    {"messages": [HumanMessage(content=user_input)]},
-                    config=CONFIG,
-                    stream_mode="messages",
-                ):
-                    if isinstance(message_chunk, ToolMessage):
-                        tool_name = getattr(message_chunk, "name", "tool")
-                        if status_holder["box"] is None:
-                            status_holder["box"] = st.status(
-                                f" Using `{tool_name}` …", expanded=True
-                            )
-                        else:
-                            status_holder["box"].update(
-                                label=f" Using `{tool_name}` …",
-                                state="running",
-                                expanded=True,
-                            )
-
-                        # Persist tool result in history
-                        st.session_state["message_history"].append(
-                            {"role": "tool", "content": str(message_chunk.content)}
-                        )
-
-                    if isinstance(message_chunk, AIMessage):
-                        yield message_chunk.content
-
-            except Exception as e:
-                st.error(f"Something went wrong: {e}")
-                st.session_state["awaiting_approval"] = False
-                return
-
-            # After streaming ends, check if graph paused for HITL
-            if is_thread_interrupted(thread_key):
-                hit_interrupt["value"] = True
-
-        ai_message = st.write_stream(ai_only_stream())
-
-        if status_holder["box"] is not None:
-            status_holder["box"].update(
-                label=" Tool finished", state="complete", expanded=False
-            )
-
-    st.session_state["message_history"].append(
-        {"role": "assistant", "content": ai_message}
-    )
-
-    # If graph paused mid stream, activate HITL banner
-    if hit_interrupt["value"]:
-        st.session_state["awaiting_approval"] = True
-        st.session_state["pending_interrupt_msg"] = get_pending_interrupt(thread_key)
-        st.rerun()
-
-    doc_meta = thread_document_metadata(thread_key)
-    if doc_meta:
-        st.caption(
-            f"Document indexed: {doc_meta.get('filename')} "
-            f"(chunks: {doc_meta.get('chunks')}, pages: {doc_meta.get('documents')})"
+        ai_reply = st.write_stream(
+            stream_agent_reply(thread_id, user_input)
         )
 
-st.divider()
+    if ai_reply:
+        st.session_state["message_history"].append(
+            {
+                "role": "assistant",
+                "content": ai_reply,
+            }
+        )
 
-# -------------------------------------------------------
-#  THREAD SWITCHING
-# -------------------------------------------------------
-if selected_thread:
-    st.session_state["thread_id"] = selected_thread
-    messages = load_conversation(selected_thread)
-
-    temp_messages = []
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            temp_messages.append({"role": "user", "content": msg.content})
-        elif isinstance(msg, AIMessage):
-            temp_messages.append({"role": "assistant", "content": msg.content})
-        elif isinstance(msg, ToolMessage):
-            temp_messages.append({"role": "tool", "content": str(msg.content)})
-
-    st.session_state["message_history"] = temp_messages
-    st.session_state["ingested_docs"].setdefault(str(selected_thread), {})
-    st.rerun()
+    # Show the approval banner immediately after a paused stock action.
+    if st.session_state["awaiting_approval"]:
+        st.rerun()

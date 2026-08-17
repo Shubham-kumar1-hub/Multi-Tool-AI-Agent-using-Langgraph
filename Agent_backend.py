@@ -38,7 +38,7 @@ load_dotenv()
 API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-120b",
     temperature=0,
 )
 
@@ -420,7 +420,11 @@ def chat_node(state: ChatState, config=None):
             "tool_call_count": 0,
         }
  
-    uploaded_filename = state.get("uploaded_filename", "")
+    uploaded_filename = (
+        state.get("uploaded_filename", "")
+        or _THREAD_METADATA.get(str(thread_id), {}).get("filename", "")
+    )
+ 
     doc_hint = (
         f"A PDF named '{uploaded_filename}' is indexed for this thread. "
         "Use rag_tool to answer document questions."

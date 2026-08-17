@@ -1,24 +1,40 @@
 # api/main.py
 # Complete core JWT authentication API.
-#
-# This file does NOT change your Streamlit app or LangGraph agent logic.
 # It provides authentication and ownership APIs that the UI will use next.
 
-import hashlib
 import os
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import uuid4, UUID
 
+import hashlib
 import jwt
 import psycopg
+from pwdlib import PasswordHash
+
 from dotenv import load_dotenv
+
+from fastapi import File, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from psycopg.errors import UniqueViolation
+
+from typing import Literal
 from pydantic import BaseModel, EmailStr, Field
-from pwdlib import PasswordHash
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from Agent_backend import (
+    chatbot,
+    get_pending_interrupt,
+    ingest_pdf,
+    is_thread_interrupted,
+    resume_with_decision,
+)
 
 # Load values from .env.
 load_dotenv()
@@ -98,6 +114,22 @@ class ThreadResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+class ChatRequest(BaseModel):
+    """A normal user message sent to an owned Langgraph Thread."""
+
+    message: str = Field(min_length=1, max_length=8000)
+
+class ApprovalRequest(BaseModel):
+    """The decision supplied to a paused buy/sell tool."""
+
+    decision: Literal["yes", "no"]
+
+class ConversationResponse(BaseModel):
+    """Messages and approval state needed by the Streamlit UI."""
+
+    messages: list[dict]
+    pending_interrupt: str | None = None
+
 
 # -------------------------
 # Token helper functions
@@ -105,7 +137,7 @@ class ThreadResponse(BaseModel):
 
 def hash_refresh_token(refresh_token: str) -> str:
     """
-    Hash a refresh token before storing or searching for it.
+    Hashing a refresh token before storing or searching for it.
 
     If the database is compromised, raw refresh tokens are not exposed.
     """
@@ -121,7 +153,7 @@ def create_access_token(
     token_version: int,
 ) -> str:
     """
-    Create a short-lived JWT.
+    Creating a short-lived JWT.
 
     token_version lets logout-all invalidate existing access tokens.
     """
@@ -147,7 +179,7 @@ def create_access_token(
 
 def create_and_store_refresh_token(cursor, user_id: str) -> str:
     """
-    Create a long-lived refresh token and store only its SHA-256 hash.
+    Creating a long-lived refresh token and storing only its SHA-256 hash.
     """
 
     raw_refresh_token = secrets.token_urlsafe(48)
@@ -182,7 +214,7 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict:
     """
-    Validate access JWT, then verify the user still exists and is active.
+    Validating access JWT, then verifying the user still exists and is active.
     """
 
     if credentials is None:
@@ -238,6 +270,110 @@ def get_current_user(
         "id": str(user[0]),
         "email": user[1],
     }
+
+
+MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def require_owned_thread(
+    thread_id: UUID,
+    current_user: dict,
+) -> None:
+    """
+    Raises 404 unless this thread belongs to the authenticated user.
+
+    Every agent, PDF, history, and approval API route calls this first.
+    """
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM app_threads
+                WHERE thread_id = %s
+                    AND user_id = %s
+                """,
+                (thread_id, current_user["id"]),
+            )
+            owned_thread = cursor.fetchone()
+
+    if owned_thread is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Thread not found.",
+        )
+
+
+def touch_thread(thread_id: UUID) -> None:
+    """Moving an active thread to the top of the user's sidebar."""
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE app_threads
+                SET updated_at = NOW()
+                WHERE thread_id = %s
+                """,
+                (thread_id,),
+            )
+        conn.commit()
+
+
+def serialize_message(message) -> dict:
+    """
+    Converting LangChain message objects into simple JSON-safe dictionaries.
+    """
+
+    if isinstance(message, HumanMessage):
+        role = "user"
+    elif isinstance(message, ToolMessage):
+        role = "tool"
+    else:
+        role = "assistant"
+
+    content = message.content
+
+    # Most messages contain text, but some tool calls may contain structured data.
+    if not isinstance(content, str):
+        content = json.dumps(content, default=str)
+
+    return {
+        "role": role,
+        "content": content,
+    }
+
+
+def get_conversation(thread_id: UUID) -> ConversationResponse:
+    """Read saved LangGraph checkpoint messages for one thread."""
+
+    config = {
+        "configurable": {
+            "thread_id": str(thread_id),
+        }
+    }
+
+    state = chatbot.get_state(config)
+
+    messages = [
+        serialize_message(message)
+        for message in state.values.get("messages", [])
+    ]
+
+    return ConversationResponse(
+        messages=messages,
+        pending_interrupt=get_pending_interrupt(str(thread_id)),
+    )
+
+
+def sse_event(event_name: str, payload: dict) -> str:
+    """Formating one Server-Sent Event response."""
+
+    return (
+        f"event: {event_name}\n"
+        f"data: {json.dumps(payload, default=str)}\n\n"
+    )
 
 
 # -------------------------
@@ -374,7 +510,7 @@ def login_user(payload: LoginRequest):
 )
 def refresh_access_token(payload: RefreshTokenRequest):
     """
-    Replace a valid refresh token with a new access + refresh token pair.
+    Replacing a valid refresh token with a new access + refresh token pair.
 
     This is refresh-token rotation: the old refresh token becomes invalid.
     """
@@ -414,7 +550,7 @@ def refresh_access_token(payload: RefreshTokenRequest):
 
             token_id, user_id, _, email, _, token_version = stored_token
 
-            # Revoke the old token before creating a replacement.
+            # Revoking the old token before creating a replacement.
             cursor.execute(
                 """
                 UPDATE refresh_tokens
@@ -485,7 +621,7 @@ def logout_from_all_devices(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Revoke every refresh token and invalidate every current access JWT.
+    Revoking every refresh token and invalidate every current access JWT.
     """
 
     with psycopg.connect(DATABASE_URL) as conn:
@@ -544,7 +680,7 @@ def create_thread(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Create a LangGraph-compatible thread ID owned by the logged-in user.
+    Creating a LangGraph-compatible thread ID owned by the logged-in user.
     """
 
     thread_id = uuid4()
@@ -620,3 +756,196 @@ def list_my_threads(
         }
         for thread in threads
     ]
+
+
+# -------------------------
+# Protected agent routes
+# -------------------------
+
+@app.get(
+    "/threads/{thread_id}/messages",
+    response_model=ConversationResponse,
+)
+def load_thread_messages(
+    thread_id: UUID,
+    current_user: dict = Depends(get_current_user),
+):
+    """Loading history only after verifying thread ownership."""
+
+    require_owned_thread(thread_id, current_user)
+
+    return get_conversation(thread_id)
+
+
+@app.post("/threads/{thread_id}/documents")
+def upload_pdf(
+    thread_id: UUID,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Verifying ownership before accepting and indexing a PDF.
+    """
+
+    require_owned_thread(thread_id, current_user)
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF files are allowed.",
+        )
+
+    file_bytes = file.file.read()
+
+    if len(file_bytes) > MAX_PDF_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="PDF is too large. Maximum allowed size is 10 MB.",
+        )
+
+    # A PDF file starts with this signature.
+    if not file_bytes.startswith(b"%PDF"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is not a valid PDF.",
+        )
+
+    summary = ingest_pdf(
+        file_bytes=file_bytes,
+        thread_id=str(thread_id),
+        filename=file.filename,
+    )
+
+    touch_thread(thread_id)
+
+    return {
+        "message": "PDF indexed successfully.",
+        "document": summary,
+    }
+
+
+@app.post("/threads/{thread_id}/chat/stream")
+def stream_chat(
+    thread_id: UUID,
+    payload: ChatRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Streaming the existing LangGraph response through FastAPI.
+
+    """
+
+    require_owned_thread(thread_id, current_user)
+
+    if is_thread_interrupted(str(thread_id)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This thread is waiting for approval.",
+        )
+
+    def event_stream():
+        try:
+            config = {
+                "configurable": {
+                    "thread_id": str(thread_id),
+                },
+                "metadata": {
+                    "thread_id": str(thread_id),
+                    "user_id": current_user["id"],
+                },
+                "run_name": "chat_turn",
+            }
+
+            for message_chunk, _ in chatbot.stream(
+                {
+                    "messages": [
+                        HumanMessage(content=payload.message.strip())
+                    ]
+                },
+                config=config,
+                stream_mode="messages",
+            ):
+                if isinstance(message_chunk, ToolMessage):
+                    yield sse_event(
+                        "tool",
+                        {
+                            "name": getattr(
+                                message_chunk,
+                                "name",
+                                "tool",
+                            ),
+                            "content": str(message_chunk.content),
+                        },
+                    )
+
+                elif isinstance(message_chunk, AIMessage):
+                    if message_chunk.content:
+                        yield sse_event(
+                            "token",
+                            {
+                                "text": str(message_chunk.content),
+                            },
+                        )
+
+            pending_interrupt = get_pending_interrupt(str(thread_id))
+
+            if pending_interrupt:
+                yield sse_event(
+                    "interrupt",
+                    {
+                        "message": pending_interrupt,
+                    },
+                )
+
+            touch_thread(thread_id)
+
+            yield sse_event("done", {})
+
+        except Exception as e:
+            print(f"Agent error: {type(e).__name__}: {e}")
+            yield sse_event(
+                "error",
+                {
+                    "message": "The agent could not complete this request.",
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post(
+    "/threads/{thread_id}/approval",
+    response_model=ConversationResponse,
+)
+def approve_or_cancel_action(
+    thread_id: UUID,
+    payload: ApprovalRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Resume an owned paused LangGraph thread with yes/no approval.
+    """
+
+    require_owned_thread(thread_id, current_user)
+
+    if not is_thread_interrupted(str(thread_id)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This thread is not awaiting approval.",
+        )
+
+    resume_with_decision(
+        thread_id=str(thread_id),
+        decision=payload.decision,
+    )
+
+    touch_thread(thread_id)
+
+    return get_conversation(thread_id)
