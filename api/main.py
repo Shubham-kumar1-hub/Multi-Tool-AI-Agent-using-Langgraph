@@ -24,7 +24,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from psycopg.errors import UniqueViolation
 
 from typing import Literal
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -118,6 +118,28 @@ class ChatRequest(BaseModel):
     """A normal user message sent to an owned Langgraph Thread."""
 
     message: str = Field(min_length=1, max_length=8000)
+
+    @field_validator("message")
+    @classmethod
+    def block_prompt_injection(cls, value: str) -> str:
+        blocked_phrases = [
+            "ignore previous instructions",
+            "ignore all previous instructions",
+            "disregard your instructions",
+            "you are now",
+            "system prompt",
+            "reveal your instructions",
+        ]
+
+        lowered = value.lower()
+
+        for phrase in blocked_phrases:
+            if phrase in lowered:
+                raise ValueError(
+                    "Your message contains a blocked phrase. "
+                    "Please rephrase your request."
+                )
+        return value
 
 class ApprovalRequest(BaseModel):
     """The decision supplied to a paused buy/sell tool."""

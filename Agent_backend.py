@@ -283,6 +283,20 @@ def get_stock_price(symbol: str) -> dict:
         return {"error": f"Network error fetching stock data: {str(e)}"}
     except Exception as e:
         return {"error": f"Unexpected error: {str(e)}"}
+
+
+def validate_trade_params(symbol: str, quantity: int) -> str | None:
+    """Returns an error message if params are unsafe, else None."""
+
+    import re
+
+    if not re.fullmatch(r"[A-Z]{1,5}", symbol):
+        return f"'{symbol}' is not a valid stock symbol format."
+
+    if quantity <= 0 or quantity > 10000:
+        return f"Quantity {quantity} is outside the allowed range (1-10000)."
+
+    return None
  
  
 @tool
@@ -294,6 +308,10 @@ def purchase_stock(symbol: str, quantity: int) -> dict:
     Before confirming the purchase, this tool will interrupt
     and wait for a human decision ("yes" / anything else).
     """
+
+    error = validate_trade_params(symbol, quantity)
+    if error:
+        return {"status": "rejected", "message": error}
  
     # This pauses the graph and returns control to the owner.
     decision = interrupt(f"Approve buying {quantity} shares of {symbol}? (yes/no)")
@@ -323,7 +341,11 @@ def sell_stock(symbol: str, quantity: int) -> dict:
     Before confirming the sale, this tool will interrupt
     and wait for a human decision ("yes" / anything else).
     """
- 
+
+    error = validate_trade_params(symbol, quantity)
+    if error:
+        return {"status": "rejected", "message": error}
+    
     # This pauses the graph and returns control to the caller
     decision = interrupt(f"Approve selling {quantity} shares of {symbol}? (yes/no)")
  
