@@ -2,9 +2,7 @@
 #  docker-compose.yml
 #  Project : Multi-Tool AI Agent with Human-in-the-Loop
 # -------------------------------------------------------------
-#  docker-compose lets you configure and run your container
-#  with a single command instead of a long docker run command.
-# -------------------------------------------------------------
+
 
 services:
   postgres:
