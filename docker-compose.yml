@@ -19,7 +19,7 @@ services:
       POSTGRES_PASSWORD: change_me_local_only
 
     ports:
-      # Your Python app will connect to localhost:5432
+      # Python app will connect to localhost:5432
       - "5433:5432"
 
     volumes:
