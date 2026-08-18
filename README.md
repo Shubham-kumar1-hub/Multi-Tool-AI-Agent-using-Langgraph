@@ -5,309 +5,163 @@ A stateful multi-tool AI agent built with LangGraph that combines RAG over PDFs,
 [![Python](https://img.shields.io/badge/Python-3.12.7-blue)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.1.10-green)](https://github.com/langchain-ai/langgraph)
 [![Groq](https://img.shields.io/badge/LLM-Groq%20Llama3.3--70b-orange)](https://groq.com/)
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL%20%2B%20pgvector-336791)](https://www.postgresql.org/)
 [![Streamlit](https://img.shields.io/badge/UI-Streamlit-red)](https://streamlit.io/)
-[![Docker](https://img.shields.io/badge/Docker-Supported-blue)](https://www.docker.com/)
 
 ---
 
-## Live Demo
+## 🚀 What It Does
 
-- **App:** https://agent-using-langgraph-k5zkvjcidrcdryg9q5fxbu.streamlit.app/
-- **GitHub:** https://github.com/Shubham-kumar1-hub/Multi-Tool-AI-Agent-using-Langgraph
-
----
-
-## What It Does
-
-This project is a multi-tool conversational AI agent where the user can:
-
-- **Chat with their PDF** -> upload any PDF and ask questions about it
-- **Get real-time stock prices** -> fetch live data for any ticker symbol (AAPL, TSLA, etc.)
-- **Buy / Sell stocks** -> simulate financial trades with human approval required before execution
-- **Search the web** -> get current information via DuckDuckGo
-- **Do calculations** -> arithmetic operations through a dedicated calculator tool
-- **Switch between conversations** -> all chats are persisted and resumable
+This project is an advanced conversational AI agent capable of managing long-term contexts, integrating with databases, and safely executing workflows. You can:
+- **Chat with your PDFs:** Upload documents and ask questions with exact page citations.
+- **Get Real-Time Stock Data:** Fetch live pricing for any stock ticker symbol (e.g., AAPL, NVDA).
+- **Simulate Stock Trades (HITL):** Initiate "buy" or "sell" orders that pause the AI's thought process, waiting for your explicit human approval before proceeding.
+- **Search the Web:** Dynamically retrieve the latest news and facts.
+- **Manage Private Threads:** Sign up, log in securely, and switch between your isolated, persistent chat histories.
 
 ---
 
-## Key Features
+## ✨ Key Features & Architecture
 
-### Human-in-the-Loop (HITL)
-The most unique feature of this project. When the agent wants to execute a stock purchase or sale, the graph **pauses completely** and waits for the user to approve or reject the action before continuing. This is implemented using LangGraph's `interrupt()` and `Command(resume=...)` pattern.
+### 1. RAG Pipeline with PostgreSQL & pgvector
+Migrated from local FAISS to a robust **PostgreSQL + pgvector** architecture. 
+- PDFs are parsed using `PyPDFLoader` and chunked via `RecursiveCharacterTextSplitter`.
+- Chunks are embedded using `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions).
+- `pgvector` seamlessly stores embeddings, allowing for efficient Maximum Marginal Relevance (MMR) similarity searches.
 
-```
-User: "Buy 10 shares of AAPL"
-Agent: calls purchase_stock tool
-Graph: ⏸️ PAUSED — waiting for human approval
-User: clicks ✅ Yes or ❌ No
-Graph: ▶️ RESUMES with the decision
-Agent: confirms or cancels the order
-```
+### 2. Human-in-the-Loop (HITL) Execution
+Using LangGraph's state graph, any call to the `purchase_stock` or `sell_stock` tools interrupts the agent.
+- **Graph Pauses:** The Streamlit frontend intercepts the `interrupt()` signal.
+- **Human Approval:** The user is presented with a UI banner to ✅ Approve or ❌ Cancel.
+- **Graph Resumes:** The user's decision is fed back into the graph via `Command(resume=decision)`.
 
-### RAG Pipeline
-- PDFs are uploaded via the sidebar and chunked using `RecursiveCharacterTextSplitter`
-- Chunks are embedded using `sentence-transformers/all-MiniLM-L6-v2`
-- Stored and retrieved using FAISS with **MMR (Maximum Marginal Relevance)** for diverse, non-redundant results
-- FAISS indexes are **persisted to disk** per thread — survive backend restarts
-- Responses include **page citations** so users can verify sources
+### 3. FastAPI & JWT Security Layer
+The agent backend is wrapped in a secure **FastAPI** service.
+- Features complete JWT-based authentication (short-lived access tokens, long-lived SHA-256 hashed refresh tokens).
+- Users can only access and query data from threads they own.
+- Chat streaming utilizes Server-Sent Events (SSE) to render agent tokens and tool calls in real-time.
 
-### Stateful Conversations
-- Every conversation is a separate **thread** with its own UUID
-- Conversation history is persisted using **SQLite checkpointing** via LangGraph
-- Threads survive page refreshes and app restarts
-- Past conversations are accessible from the sidebar
-
-### Tool Call Safety
-- Agent is limited to **10 tool calls per turn** to prevent infinite loops
-- All tool errors are handled gracefully and returned as descriptive messages
+### 4. Stateful Conversation Memory
+LangGraph integrates tightly with `PostgresSaver`. Every chat thread is fully persisted in PostgreSQL, meaning users can refresh the page, log out, or restart the server without losing their context or pending approvals.
 
 ---
 
-## Architecture
+## 🧰 Tools Available to the Agent
 
-## Screenshots
-
-### Main Chat Interface
-![Main UI](./images/main_ui.png.png)
-
----
-
-### Human-in-the-Loop Approval
-![HITL Approval](./images/hitl_approval.png.png)
-
----
-
-### Stock Price Tool
-![Stock Tool](./images/stock_tool.png.png)
+| Tool Name | Description | Requires Approval |
+| :--- | :--- | :---: |
+| `rag_tool` | Retrieves relevant text chunks from the user's uploaded PDF using MMR search. | ❌ No |
+| `get_stock_price` | Fetches real-time stock data from the Alpha Vantage API. | ❌ No |
+| `purchase_stock` | Simulates purchasing shares. Agent cannot proceed without user input. | ✅ Yes |
+| `sell_stock` | Simulates selling shares. Agent cannot proceed without user input. | ✅ Yes |
+| `calculator` | Performs exact arithmetic (add, sub, mul, div) to avoid LLM math hallucinations. | ❌ No |
+| `duckduckgo_search`| Searches the web for up-to-date knowledge and news. | ❌ No |
 
 ---
 
-### PDF Question Answering (RAG)
-![RAG Demo](./images/rag_demo1.png.png)
-```
-┌─────────────────────────────────────────┐
-│           Streamlit Frontend            │
-│  Sidebar: PDF upload, thread switcher   │
-│  Main: Chat UI + HITL approval banner   │
-└────────────────────┬────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────┐
-│          LangGraph Agent Graph          │
-│                                         │
-│   START → chat_node ──► tools_condition │
-│               ▲              │          │
-│               └──── tools ◄──┘          │
-└────────────────────┬────────────────────┘
-                     │
-        ┌────────────┼────────────┐
-        ▼            ▼            ▼
-   ┌─────────┐  ┌─────────┐  ┌──────────┐
-   │  Groq   │  │  FAISS  │  │  SQLite  │
-   │ Llama3.3│  │ Vectors │  │ History  │
-   └─────────┘  └─────────┘  └──────────┘
-```
+## 🧪 Evaluation Framework
 
-### Tools Available to the Agent
-
-| Tool | Description |
-|---|---|
-| `rag_tool` | Retrieves relevant chunks from the uploaded PDF |
-| `get_stock_price` | Fetches real-time stock data from Alpha Vantage |
-| `purchase_stock` | Simulates buying stocks — triggers HITL approval |
-| `sell_stock` | Simulates selling stocks — triggers HITL approval |
-| `calculator` | Performs arithmetic (add, sub, mul, div) |
-| `duckduckgo_search` | Searches the web for current information |
+The project includes an automated evaluation pipeline (`eval/` directory) to guarantee agent reliability:
+- **`golden_dataset.py`**: Defines strict Q&A scenarios (e.g., verifying the agent correctly picks the `calculator` for math, or `rag_tool` for document summaries).
+- **`eval_guardrails.py`**: Simulates prompt injections (e.g., "ignore previous instructions") to ensure the `ChatRequest` Pydantic models block malicious inputs. Validates stock parameters (preventing trades of >10,000 shares).
+- **`run_report.py`**: Executes the testing suite and outputs a pass/fail diagnostic report of tool usage and keyword matching.
 
 ---
 
-## Tech Stack
+## 💻 Tech Stack
 
-| Category | Technology |
-|---|---|
-| LLM | Groq — Llama 3.3 70B Versatile |
-| Agent Framework | LangGraph |
-| RAG | FAISS + HuggingFace Embeddings |
-| Embeddings | sentence-transformers/all-MiniLM-L6-v2 |
-| PDF Parsing | PyPDFLoader |
-| Web Search | DuckDuckGo |
-| Stock API | Alpha Vantage |
-| Frontend | Streamlit |
-| Persistence | SQLite (conversations) + FAISS on disk (vectors) |
-| Containerization | Docker + Docker Compose |
-| Language | Python 3.12.7 |
+- **LLM:** Groq (`llama-3.3-70b-versatile`)
+- **Agent Orchestration:** LangGraph
+- **Backend API:** FastAPI, Pydantic
+- **Database:** PostgreSQL (with `pgvector` extension)
+- **Embeddings:** HuggingFace (`all-MiniLM-L6-v2`)
+- **Frontend:** Streamlit
+- **Containerization:** Docker & Docker Compose
 
 ---
 
-## Project Structure
+## 📂 Project Structure
 
-```
-Agent-using-Langgraph/
-├── Agent_backend.py       # LangGraph graph, tools, RAG, HITL logic
-├── Agent_frontend.py      # Streamlit UI
-├── requirements.txt       # Python dependencies
-├── Dockerfile             # Docker image definition
-├── docker-compose.yml     # Docker Compose configuration
-├── .dockerignore          # Files excluded from Docker image
-├── .gitignore             # Files excluded from Git
-├── .env                   # API keys (never committed)
-├── faiss_indexes/         # FAISS vector stores (auto-created)
-└── chatbot.db             # SQLite conversation history (auto-created)
+```bash
+.
+├── api/
+│   └── main.py                   # FastAPI application & JWT Auth routes
+├── eval/                         # Evaluation pipeline
+│   ├── eval_agent.py             # Agent execution tests
+│   ├── eval_guardrails.py        # Security & prompt injection tests
+│   ├── golden_dataset.py         # Baseline test cases
+│   └── run_report.py             # Main evaluation script
+├── images/                       # UI Screenshots
+├── Agent_backend.py              # LangGraph definition, RAG, & Tools
+├── Agent_frontend.py             # Streamlit UI
+├── docker-compose.yml            # PostgreSQL + pgvector container config
+├── Dockerfile                    # Application containerization
+├── requirements.txt              # Python dependencies
+├── setup_auth_tables.py          # DB Migration: Users
+├── setup_auth_security_tables.py # DB Migration: Refresh tokens
+├── setup_thread_tables.py        # DB Migration: Thread ownership
+└── setup_vector_store.py         # DB Migration: pgvector document_chunks
 ```
 
 ---
 
-## Getting Started
+## 🏁 Getting Started (End-to-End Guide)
 
-### Prerequisites
-- Python 3.12.7
-- A [Groq API key](https://console.groq.com/) (free)
-- An [Alpha Vantage API key](https://www.alphavantage.co/support/#api-key) (free)
+Follow these steps to run the complete stack on your local machine.
 
-### Option 1 — Run with Docker (Recommended)
+### 1. Prerequisites
+- Python 3.12+
+- Docker Desktop
+- [Groq API Key](https://console.groq.com/) (Free)
+- [Alpha Vantage API Key](https://www.alphavantage.co/) (Free)
 
-**Step 1:** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-
-**Step 2:** Clone the repository
+### 2. Clone the Repository
 ```bash
 git clone https://github.com/Shubham-kumar1-hub/Agent-using-Langgraph.git
 cd Agent-using-Langgraph
 ```
 
-**Step 3:** Create your `.env` file
-```bash
+### 3. Configure Environment Variables
+Create a `.env` file in the root directory:
+```env
 GROQ_API_KEY=your_groq_api_key_here
 ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key_here
+DATABASE_URL=postgresql://agent_user:change_me_local_only@localhost:5433/multi_tool_agent
+JWT_SECRET_KEY=generate_a_random_secure_string_here
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=15
+REFRESH_TOKEN_EXPIRE_DAYS=7
+API_BASE_URL=http://127.0.0.1:8000
 ```
 
-**Step 4:** Build and run
+### 4. Start the PostgreSQL Database
+Spin up the `pgvector` container using Docker Compose:
 ```bash
-docker-compose up --build
+docker-compose up -d
 ```
 
-**Step 5:** Open your browser
-```
-http://localhost:8501
-```
-
----
-
-### Option 2 — Run Locally
-
-**Step 1:** Clone the repository
+### 5. Run Database Migrations
+Initialize your database schemas and vector tables:
 ```bash
-git clone https://github.com/Shubham-kumar1-hub/Multi-Tool-AI-Agent-using-Langgraph.git
-cd Multi-Tool-AI-Agent-using-Langgraph
+python setup_auth_tables.py
+python setup_auth_security_tables.py
+python setup_thread_tables.py
+python setup_vector_store.py
 ```
 
-**Step 2:** Create and activate a virtual environment
+### 6. Start the FastAPI Backend
+In a new terminal window, start the secure backend API:
 ```bash
-python -m venv venv
-venv\Scripts\activate        # Windows
-source venv/bin/activate     # Mac/Linux
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**Step 3:** Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-**Step 4:** Create your `.env` file
-```
-GROQ_API_KEY=your_groq_api_key_here
-ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key_here
-```
-
-**Step 5:** Run the app
+### 7. Start the Streamlit Frontend
+In a separate terminal window, launch the UI:
 ```bash
 streamlit run Agent_frontend.py
 ```
-
-**Step 6:** Open your browser
-```
-http://localhost:8501
-```
+*Navigate to `http://localhost:8501` to create an account and begin chatting!*
 
 ---
-
-## Docker Commands
-
-```bash
-# Build and start
-docker-compose up --build
-
-# Start in background
-docker-compose up -d
-
-# Stop
-docker-compose down
-
-# View logs
-docker-compose logs -f
-
-# Rebuild after code changes
-docker-compose up --build
-```
-
----
-
-## How to Use
-
-**Chat normally**
-Just type any question in the chat input box.
-
-**Ask about a PDF**
-1. Upload a PDF using the sidebar file uploader
-2. Ask any question about its content — the agent will retrieve relevant chunks automatically
-
-**Get stock prices**
-```
-"What is the current price of TSLA?"
-"Show me AAPL stock data"
-```
-
-**Simulate a stock trade**
-```
-"Buy 5 shares of MSFT"
-"Sell 10 shares of GOOGL"
-```
-The app will pause and show an approval banner — click ✅ Yes or ❌ No.
-
-**Search the web**
-```
-"What are the latest AI news today?"
-"Who is the CEO of OpenAI?"
-```
-
-**Calculate**
-```
-"What is 1250 multiplied by 3.5?"
-"Divide 9500 by 4"
-```
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `GROQ_API_KEY` | ✅ Yes | Your Groq API key from console.groq.com |
-| `ALPHA_VANTAGE_API_KEY` | ✅ Yes | Your Alpha Vantage key for stock data |
-
----
-
-## Known Limitations
-
-- **FAISS** is an in-memory vector store — does not support multiple concurrent users at scale
-- **Streamlit** is single-threaded — not suitable for high production traffic
-- **No authentication** — all users share the same session namespace
-- **SQLite** is file-based — not suitable for distributed deployments
-
-For production scale these would be replaced with Pinecone, FastAPI, Supabase Auth, and PostgreSQL.
-
----
-
-## Author
-
-**Shubham Kumar**
-- GitHub: [@Shubham-kumar1-hub](https://github.com/Shubham-kumar1-hub)
+*Developed by Shubham Kumar*
