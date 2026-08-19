@@ -1,167 +1,167 @@
 # Multi-Tool AI Agent with Human-in-the-Loop
 
-A stateful multi-tool AI agent built with LangGraph that combines RAG over PDFs, real-time stock data, web search, and financial transaction simulation all with a Human-in-the-Loop approval system for sensitive actions.
-
-[![Python](https://img.shields.io/badge/Python-3.12.7-blue)](https://www.python.org/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-1.1.10-green)](https://github.com/langchain-ai/langgraph)
-[![Groq](https://img.shields.io/badge/LLM-Groq%20Llama3.3--70b-orange)](https://groq.com/)
-[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)](https://fastapi.tiangolo.com/)
-[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL%20%2B%20pgvector-336791)](https://www.postgresql.org/)
-[![Streamlit](https://img.shields.io/badge/UI-Streamlit-red)](https://streamlit.io/)
+A conversational AI agent built with LangGraph that can search the web, do calculations, check stock prices, answer questions from uploaded PDFs, and even buy/sell stocks — but pauses and asks for human approval before doing anything financial.
 
 ---
 
-## 🚀 What It Does
+## What this project does
 
-This project is an advanced conversational AI agent capable of managing long-term contexts, integrating with databases, and safely executing workflows. You can:
-- **Chat with your PDFs:** Upload documents and ask questions with exact page citations.
-- **Get Real-Time Stock Data:** Fetch live pricing for any stock ticker symbol (e.g., AAPL, NVDA).
-- **Simulate Stock Trades (HITL):** Initiate "buy" or "sell" orders that pause the AI's thought process, waiting for your explicit human approval before proceeding.
-- **Search the Web:** Dynamically retrieve the latest news and facts.
-- **Manage Private Threads:** Sign up, log in securely, and switch between your isolated, persistent chat histories.
+You chat with the agent, and depending on what you ask, it decides which tool to use:
 
----
-
-## ✨ Key Features & Architecture
-
-### 1. RAG Pipeline with PostgreSQL & pgvector
-Migrated from local FAISS to a robust **PostgreSQL + pgvector** architecture. 
-- PDFs are parsed using `PyPDFLoader` and chunked via `RecursiveCharacterTextSplitter`.
-- Chunks are embedded using `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions).
-- `pgvector` seamlessly stores embeddings, allowing for efficient Maximum Marginal Relevance (MMR) similarity searches.
-
-### 2. Human-in-the-Loop (HITL) Execution
-Using LangGraph's state graph, any call to the `purchase_stock` or `sell_stock` tools interrupts the agent.
-- **Graph Pauses:** The Streamlit frontend intercepts the `interrupt()` signal.
-- **Human Approval:** The user is presented with a UI banner to ✅ Approve or ❌ Cancel.
-- **Graph Resumes:** The user's decision is fed back into the graph via `Command(resume=decision)`.
-
-### 3. FastAPI & JWT Security Layer
-The agent backend is wrapped in a secure **FastAPI** service.
-- Features complete JWT-based authentication (short-lived access tokens, long-lived SHA-256 hashed refresh tokens).
-- Users can only access and query data from threads they own.
-- Chat streaming utilizes Server-Sent Events (SSE) to render agent tokens and tool calls in real-time.
-
-### 4. Stateful Conversation Memory
-LangGraph integrates tightly with `PostgresSaver`. Every chat thread is fully persisted in PostgreSQL, meaning users can refresh the page, log out, or restart the server without losing their context or pending approvals.
+- **Web search** — for general/current-event questions
+- **Calculator** — for math
+- **Stock price lookup** — pulls live stock prices
+- **RAG (PDF Q&A)** — upload a PDF, ask questions about it, the agent retrieves relevant chunks and answers from them
+- **Buy/Sell stock** — before executing, it pauses and waits for the user to approve or reject the trade (this is the "human-in-the-loop" part)
 
 ---
 
-## 🧰 Tools Available to the Agent
+## Tech Stack
 
-| Tool Name | Description | Requires Approval |
-| :--- | :--- | :---: |
-| `rag_tool` | Retrieves relevant text chunks from the user's uploaded PDF using MMR search. | ❌ No |
-| `get_stock_price` | Fetches real-time stock data from the Alpha Vantage API. | ❌ No |
-| `purchase_stock` | Simulates purchasing shares. Agent cannot proceed without user input. | ✅ Yes |
-| `sell_stock` | Simulates selling shares. Agent cannot proceed without user input. | ✅ Yes |
-| `calculator` | Performs exact arithmetic (add, sub, mul, div) to avoid LLM math hallucinations. | ❌ No |
-| `duckduckgo_search`| Searches the web for up-to-date knowledge and news. | ❌ No |
-
----
-
-## 🧪 Evaluation Framework
-
-The project includes an automated evaluation pipeline (`eval/` directory) to guarantee agent reliability:
-- **`golden_dataset.py`**: Defines strict Q&A scenarios (e.g., verifying the agent correctly picks the `calculator` for math, or `rag_tool` for document summaries).
-- **`eval_guardrails.py`**: Simulates prompt injections (e.g., "ignore previous instructions") to ensure the `ChatRequest` Pydantic models block malicious inputs. Validates stock parameters (preventing trades of >10,000 shares).
-- **`run_report.py`**: Executes the testing suite and outputs a pass/fail diagnostic report of tool usage and keyword matching.
+| Layer | What I used |
+|---|---|
+| Agent framework | LangGraph |
+| LLM | Groq (openai/gpt-oss-120b) |
+| Conversation memory | PostgreSQL via `PostgresSaver` (LangGraph checkpointer) |
+| Vector database (RAG) | pgvector (PostgreSQL extension) |
+| Backend API | FastAPI |
+| Authentication | JWT (access + refresh tokens), Argon2 password hashing |
+| Frontend | Streamlit |
+| Observability | LangSmith |
+| Containerization | Docker (for the Postgres + pgvector database) |
 
 ---
 
-## 💻 Tech Stack
+## Why I built it this way
 
-- **LLM:** Groq (`llama-3.3-70b-versatile`)
-- **Agent Orchestration:** LangGraph
-- **Backend API:** FastAPI, Pydantic
-- **Database:** PostgreSQL (with `pgvector` extension)
-- **Embeddings:** HuggingFace (`all-MiniLM-L6-v2`)
-- **Frontend:** Streamlit
-- **Containerization:** Docker & Docker Compose
+**Started simple, upgraded step by step:**
+- Started with SQLite for saving conversation history → migrated to **PostgreSQL** so it can actually scale and handle multiple users properly
+- Started with FAISS (in-memory vector store) → migrated to **pgvector** so embeddings persist in the database instead of disappearing every restart
+- Added **JWT authentication** so each user only sees their own conversations
+- Added **guardrails** to block obvious prompt injection attempts and stop unsafe trade requests (like buying 99,999 shares) before they even reach the human approval step
+- Added an **automated evaluation script** so I can check if the agent is calling the right tools and giving correct answers, instead of manually testing every time I change something
+- Added **LangSmith tracing** so I can see exactly what the agent is doing step-by-step, and debug/optimize it properly
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
-```bash
-.
+```
+Agent uisng Langgraph/
+├── .devcontainer/
+├── .vscode/
+├── Agent/
 ├── api/
-│   └── main.py                   # FastAPI application & JWT Auth routes
-├── eval/                         # Evaluation pipeline
-│   ├── eval_agent.py             # Agent execution tests
-│   ├── eval_guardrails.py        # Security & prompt injection tests
-│   ├── golden_dataset.py         # Baseline test cases
-│   └── run_report.py             # Main evaluation script
-├── images/                       # UI Screenshots
-├── Agent_backend.py              # LangGraph definition, RAG, & Tools
-├── Agent_frontend.py             # Streamlit UI
-├── docker-compose.yml            # PostgreSQL + pgvector container config
-├── Dockerfile                    # Application containerization
-├── requirements.txt              # Python dependencies
-├── setup_auth_tables.py          # DB Migration: Users
-├── setup_auth_security_tables.py # DB Migration: Refresh tokens
-├── setup_thread_tables.py        # DB Migration: Thread ownership
-└── setup_vector_store.py         # DB Migration: pgvector document_chunks
+├── eval/
+│   ├── eval_agent.py         # runs test questions through the agent automatically
+│   ├── eval_guardrails.py    # tests guardrails in isolation
+│   ├── golden_dataset.py     # list of test questions + expected answers
+│   ├── run_report.py         # prints pass/fail results
+│   └── sample.pdf            # test file used for the RAG eval case
+├── images/
+├── .dockerignore
+├── .env                       # API keys, database URL (not committed to GitHub)
+├── .gitignore
+├── Agent_backend.py           # the LangGraph agent itself — tools, graph, guardrails
+├── Agent_frontend.py          # Streamlit UI
+├── agent_metrics.json
+├── docker-compose.yml         # spins up Postgres + pgvector locally
+├── Dockerfile
+├── README.md
+├── requirements.txt
+├── setup_auth_tables.py            # creates the `users` table
+├── setup_auth_security_tables.py   # creates refresh token table + logout support
+├── setup_thread_tables.py          # creates table to track which chat belongs to which user
+├── setup_vector_store.py           # creates the pgvector table for PDF chunks
+└── test_postgres.py           # quick script to sanity-check the DB connection
 ```
+
+> Note: `chatbot.db` / `chatbot.db-shm` / `chatbot.db-wal` (legacy SQLite files) and `faiss_indexes/` (legacy FAISS index) were removed after migrating to PostgreSQL + pgvector — they're no longer used anywhere in the code.
 
 ---
 
-## 🏁 Getting Started (End-to-End Guide)
+## How to run this locally
 
-Follow these steps to run the complete stack on your local machine.
+1. **Clone the repo and install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-### 1. Prerequisites
-- Python 3.12+
-- Docker Desktop
-- [Groq API Key](https://console.groq.com/) (Free)
-- [Alpha Vantage API Key](https://www.alphavantage.co/) (Free)
+2. **Start the database**
+   ```bash
+   docker-compose up -d
+   ```
 
-### 2. Clone the Repository
-```bash
-git clone https://github.com/Shubham-kumar1-hub/Agent-using-Langgraph.git
-cd Agent-using-Langgraph
-```
+3. **Set up your `.env` file** with:
+   ```
+   DATABASE_URL=postgresql://agent_user:change_me_local_only@localhost:5433/multi_tool_agent
+   GROQ_API_KEY=your_key_here
+   LANGSMITH_TRACING=true
+   LANGSMITH_API_KEY=your_key_here
+   LANGSMITH_PROJECT=multi-utility-agent
+   ```
 
-### 3. Configure Environment Variables
-Create a `.env` file in the root directory:
-```env
-GROQ_API_KEY=your_groq_api_key_here
-ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key_here
-DATABASE_URL=postgresql://agent_user:change_me_local_only@localhost:5433/multi_tool_agent
-JWT_SECRET_KEY=generate_a_random_secure_string_here
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=15
-REFRESH_TOKEN_EXPIRE_DAYS=7
-API_BASE_URL=http://127.0.0.1:8000
-```
+4. **Run the one-time table setup scripts** (in order)
+   ```bash
+   python setup_auth_tables.py
+   python setup_auth_security_tables.py
+   python setup_thread_tables.py
+   python setup_vector_store.py
+   ```
 
-### 4. Start the PostgreSQL Database
-Spin up the `pgvector` container using Docker Compose:
-```bash
-docker-compose up -d
-```
+5. **(Optional) Verify the DB connection**
+   ```bash
+   python test_postgres.py
+   ```
 
-### 5. Run Database Migrations
-Initialize your database schemas and vector tables:
-```bash
-python setup_auth_tables.py
-python setup_auth_security_tables.py
-python setup_thread_tables.py
-python setup_vector_store.py
-```
+6. **Start the backend**
+   ```bash
+   uvicorn main:app --reload
+   ```
 
-### 6. Start the FastAPI Backend
-In a new terminal window, start the secure backend API:
-```bash
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
+7. **Start the frontend**
+   ```bash
+   streamlit run Agent_frontend.py
+   ```
 
-### 7. Start the Streamlit Frontend
-In a separate terminal window, launch the UI:
-```bash
-streamlit run Agent_frontend.py
-```
-*Navigate to `http://localhost:8501` to create an account and begin chatting!*
+8. **Run the evaluation suite (optional, checks everything still works)**
+   ```bash
+   cd eval
+   python run_report.py
+   python eval_guardrails.py
+   ```
 
 ---
-*Developed by Shubham Kumar*
+
+## Features Checklist
+
+- [x] Multi-tool LangGraph agent (search, calculator, stock price, RAG, trading)
+- [x] Human-in-the-loop approval for buy/sell actions
+- [x] PostgreSQL-backed conversation memory (checkpointer)
+- [x] pgvector-based RAG for PDF question-answering
+- [x] JWT authentication with refresh token rotation
+- [x] Input guardrails (blocks prompt injection attempts)
+- [x] Tool-level guardrails (blocks unsafe trade quantities/invalid stock symbols)
+- [x] Automated evaluation suite (tool selection + RAG + guardrail tests)
+- [x] LangSmith tracing for observability
+- [ ] Output-side guardrails (not implemented yet — scoped out for now)
+- [ ] Latency optimization (in progress)
+
+---
+
+## Honest Limitations (things I know aren't perfect yet)
+
+- Guardrails are keyword/rule-based, not semantic — they can be bypassed by rephrasing an attack differently
+- The evaluation set is small (~13 test cases) and uses simple keyword matching, not deep answer-quality scoring
+- Latency hasn't been optimized yet — this is my current focus using LangSmith traces to find slow points
+- No output filtering yet, only input and tool-parameter checks
+
+I'm listing these on purpose — I'd rather be upfront about what's a work-in-progress than pretend it's a finished production system.
+
+---
+
+## About Me
+
+Built by **Shubham Kumar**, final-year B.Tech Computer Engineering student, while learning and job-hunting for AI/ML Engineer roles.
+
+GitHub: [Shubham-kumar1-hub](https://github.com/Shubham-kumar1-hub)
