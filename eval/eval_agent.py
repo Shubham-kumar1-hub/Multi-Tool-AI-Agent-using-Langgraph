@@ -2,7 +2,7 @@ import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from uuid import uuid4
-from Agent_backend import send_message, ingest_pdf
+from backend.Agent_backend import send_message, ingest_pdf
 from golden_dataset import GOLDEN_DATASET, RAG_TEST_CASE
 
 def run_eval():
