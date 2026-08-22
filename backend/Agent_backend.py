@@ -40,6 +40,7 @@ API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 llm = ChatGroq(
     model="openai/gpt-oss-120b",
     temperature=0,
+    max_tokens=700,
 )
 
 embeddings = HuggingFaceEmbeddings(
@@ -89,7 +90,7 @@ def _get_retriever(thread_id: Optional[str]):
 
     This preserves MMR retrieval settings:
     - return 4 final chunks
-    - fetch 20 candidate chunks for diverse results 
+    - fetch 12 candidate chunks for diverse results 
     """
 
     if not thread_id:
@@ -99,7 +100,7 @@ def _get_retriever(thread_id: Optional[str]):
         search_type="mmr",
         search_kwargs={
             "k": 4,
-            "fetch_k": 20,
+            "fetch_k": 12,
             "filter": {"thread_id": str(thread_id)},
         },
     )
@@ -469,6 +470,9 @@ def chat_node(state: ChatState, config=None):
             "- Never guess stock prices — always call get_stock_price.\n"
             f"- Current thread_id is `{thread_id}` — include it in every rag_tool call.\n"
             f"- {doc_hint}\n"
+            "- Keep answers concise by default (2-4 sentences or a short list). "
+            "Only give a longer, detailed, or tabular answer if the user explicitly "
+            "asks for more detail, a full breakdown, or a summary.\n"
         )
     )
  
