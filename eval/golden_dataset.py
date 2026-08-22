@@ -31,12 +31,12 @@ GOLDEN_DATASET = [
     # --- Web search ---
     {
         "question": "Search the web for the latest news on OpenAI.",
-        "expected_tool": "duckduckgo_search",
+        "expected_tool": "search_tool",
         "expected_keyword": None,
     },
     {
         "question": "What's happening in the stock market today?",
-        "expected_tool": "duckduckgo_search",
+        "expected_tool": "search_tool",
         "expected_keyword": None,
     },
 

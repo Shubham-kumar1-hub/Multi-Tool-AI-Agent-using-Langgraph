@@ -37,6 +37,14 @@ load_dotenv()
 
 API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 
+import time
+
+_stock_price_cache: Dict[str, tuple] = {}
+STOCK_CACHE_TTL = 60  # seconds
+
+_search_cache: Dict[str, tuple] = {}
+SEARCH_CACHE_TTL = 300  # seconds
+
 llm = ChatGroq(
     model="openai/gpt-oss-120b",
     temperature=0,
@@ -201,8 +209,20 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
 # Tools
 # -------------------
  
-search_tool = DuckDuckGoSearchRun(region="us-en")
- 
+_raw_search_tool = DuckDuckGoSearchRun(region="us-en")
+
+@tool
+def search_tool(query: str) -> str:
+    """Search the web for current information, news, or general queries."""
+    cached = _search_cache.get(query)
+    if cached:
+        result, timestamp = cached
+        if time.time() - timestamp < SEARCH_CACHE_TTL:
+            return result
+
+    result = _raw_search_tool.run(query)
+    _search_cache[query] = (result, time.time())
+    return result
  
 @tool
 def calculator(first_num: float, second_num: float, operation: str) -> dict:
@@ -240,6 +260,12 @@ def get_stock_price(symbol: str) -> dict:
     Fetch latest stock price for a given symbol (e.g. 'AAPL', 'TSLA')
     using Alpha Vantage. Returns price data or a descriptive error.
     """
+
+    cached = _stock_price_cache.get(symbol)
+    if cached:
+        result, timestamp = cached
+        if time.time() - timestamp < STOCK_CACHE_TTL:
+            return result
     if not API_KEY:
         return {"error": "ALPHA_VANTAGE_API_KEY is not configured on the server."}
  
@@ -265,7 +291,7 @@ def get_stock_price(symbol: str) -> dict:
                 )
             }
  
-        return {
+        result = {
             "symbol": quote.get("01. symbol", symbol),
             "price": quote.get("05. price"),
             "open": quote.get("02. open"),
@@ -277,6 +303,8 @@ def get_stock_price(symbol: str) -> dict:
             "change": quote.get("09. change"),
             "change_percent": quote.get("10. change percent"),
         }
+        _stock_price_cache[symbol] = (result, time.time())
+        return result
  
     except requests.Timeout:
         return {"error": "Request timed out while fetching stock data. Try again."}
@@ -464,7 +492,7 @@ def chat_node(state: ChatState, config=None):
             "- purchase_stock: Simulate buying stocks — requires human approval.\n"
             "- sell_stock: Simulate selling stocks — requires human approval.\n"
             "- calculator: Arithmetic operations (add / sub / mul / div).\n"
-            "- duckduckgo_search: Search the web for current information.\n\n"
+            "- search_tool: Search the web for current information.\n\n"
             "RULES:\n"
             "- Always use rag_tool for document questions, not your own knowledge.\n"
             "- Never guess stock prices — always call get_stock_price.\n"
