@@ -48,7 +48,7 @@ SEARCH_CACHE_TTL = 300  # seconds
 llm = ChatGroq(
     model="openai/gpt-oss-120b",
     temperature=0,
-    max_tokens=700,
+    max_tokens=2500,
 )
 
 embeddings = HuggingFaceEmbeddings(
