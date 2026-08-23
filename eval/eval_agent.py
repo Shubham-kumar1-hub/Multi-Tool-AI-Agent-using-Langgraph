@@ -4,6 +4,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from uuid import uuid4
 from backend.Agent_backend import send_message, ingest_pdf
 from golden_dataset import GOLDEN_DATASET, RAG_TEST_CASE
+from eval_judge import judge_answer
 
 def run_eval():
     results = []
@@ -32,11 +33,24 @@ def run_eval():
             or case["expected_keyword"].lower() in str(final_text).lower()
         )
 
+        judge_reason = None
+        if case.get("judge_criteria"):
+            judge_result = judge_answer(
+                question=case["question"],
+                answer=str(final_text),
+                criteria=case["judge_criteria"],
+            )
+            quality_ok = judge_result["passed"]
+            judge_reason = judge_result["reason"]
+        else:
+            quality_ok = True
+
         results.append({
             **case,
             "called_tools": called_tools,
             "final_text": str(final_text)[:200],
-            "passed": tool_ok and keyword_ok,
+            "judge_reason": judge_reason,
+            "passed": tool_ok and keyword_ok and quality_ok,
         })
 
     return results
@@ -59,11 +73,24 @@ def run_rag_eval():
 
     final_text = messages[-1].content if messages else ""
 
-    passed = RAG_TEST_CASE["expected_tool"] in called_tools
+    tool_ok = RAG_TEST_CASE["expected_tool"] in called_tools
+
+    judge_reason = None
+    if RAG_TEST_CASE.get("judge_criteria"):
+        judge_result = judge_answer(
+            question=RAG_TEST_CASE["question"],
+            answer=str(final_text),
+            criteria=RAG_TEST_CASE["judge_criteria"],
+        )
+        quality_ok = judge_result["passed"]
+        judge_reason = judge_result["reason"]
+    else:
+        quality_ok = True
 
     return {
         **RAG_TEST_CASE,
         "called_tools": called_tools,
         "final_text": str(final_text)[:200],
-        "passed": passed,
+        "judge_reason": judge_reason,
+        "passed": tool_ok and quality_ok,
     }

@@ -13,3 +13,5 @@ for r in results:
     if not r["passed"]:
         print(f"   expected_tool={r['expected_tool']}, called_tools={r.get('called_tools')}")
         print(f"   expected_keyword={r['expected_keyword']}, got={r.get('final_text')}")
+        if r.get("judge_reason"):
+            print(f"   judge_reason={r['judge_reason']}")

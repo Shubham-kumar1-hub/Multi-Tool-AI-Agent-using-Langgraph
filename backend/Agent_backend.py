@@ -501,6 +501,10 @@ def chat_node(state: ChatState, config=None):
             "- Keep answers concise by default (2-4 sentences or a short list). "
             "Only give a longer, detailed, or tabular answer if the user explicitly "
             "asks for more detail, a full breakdown, or a summary.\n"
+            "- The calculator tool only supports add, subtract, multiply, and divide. "
+            "For any other operation (e.g. XOR, modulo, exponents, square roots), "
+            "tell the user it's not supported by your calculator tool instead of "
+            "computing it yourself — never do math in your head and present it as verified.\n"
         )
     )
  
