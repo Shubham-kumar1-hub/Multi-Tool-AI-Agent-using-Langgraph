@@ -4,7 +4,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from uuid import uuid4
 from backend.Agent_backend import send_message, ingest_pdf
 from golden_dataset import GOLDEN_DATASET, RAG_TEST_CASE
-from eval_judge import judge_answer
+from eval_judge import judge_answer, judge_faithfulness
 
 def run_eval():
     results = []
@@ -65,6 +65,11 @@ def run_rag_eval():
 
     final_state = send_message(thread_id, RAG_TEST_CASE["question"])
     messages = final_state.get("messages", [])
+    retrieved_context = ""
+    for msg in messages:
+        if getattr(msg, "name", None) == "rag_tool":
+            retrieved_context = str(msg.content)
+            break
 
     called_tools = []
     for msg in messages:
@@ -87,10 +92,19 @@ def run_rag_eval():
     else:
         quality_ok = True
 
+    faithfulness_reason = None
+    faithfulness_ok = True
+    if retrieved_context:
+        faithfulness_result = judge_faithfulness(str(final_text), retrieved_context)
+        faithfulness_ok = faithfulness_result["passed"]
+        faithfulness_reason = faithfulness_result["reason"]
+
     return {
         **RAG_TEST_CASE,
         "called_tools": called_tools,
         "final_text": str(final_text)[:200],
         "judge_reason": judge_reason,
-        "passed": tool_ok and quality_ok,
+        "faithfulness_reason": faithfulness_reason,
+        "passed": tool_ok and quality_ok and faithfulness_ok,
     }
+

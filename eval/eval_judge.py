@@ -58,8 +58,7 @@ REASON: <one short sentence explaining why>
     else:
         text = str(response.content).strip()
  
-    # Parse the verdict line. Default to FAIL if the format wasn't followed —
-    # safer to flag it for a human to check than to silently mark it PASS.
+    
     passed = False
     reason = text
  
@@ -70,4 +69,55 @@ REASON: <one short sentence explaining why>
         if line.strip().upper().startswith("REASON:"):
             reason = line.strip()[len("REASON:"):].strip()
  
+    return {"passed": passed, "reason": reason}
+
+
+def judge_faithfulness(answer: str, retrieved_context: str) -> dict:
+    """
+    Checks whether `answer` only makes claims that are actually supported
+    by `retrieved_context` — catches hallucination beyond what was retrieved.
+    """
+
+    prompt = f"""You are checking if an AI's answer is faithful to the source material it was given.
+
+Retrieved Context (this is ALL the source material the AI had access to):
+{retrieved_context}
+
+AI's Answer:
+{answer}
+
+Does the answer ONLY contain claims that are actually supported by the
+retrieved context above? Flag it as unfaithful if the answer adds specific
+facts, numbers, or details that are NOT present anywhere in the context.
+
+Reply in EXACTLY this format, nothing else:
+
+VERDICT: FAITHFUL
+REASON: <one short sentence>
+
+or
+
+VERDICT: UNFAITHFUL
+REASON: <one short sentence, quote the unsupported claim>
+"""
+
+    response = judge_llm.invoke(prompt)
+
+    if isinstance(response.content, list):
+        text = "".join(
+            block.get("text", "") for block in response.content if isinstance(block, dict)
+        ).strip()
+    else:
+        text = str(response.content).strip()
+
+    passed = False
+    reason = text
+
+    for line in text.splitlines():
+        line_upper = line.strip().upper()
+        if line_upper.startswith("VERDICT:"):
+            passed = "FAITHFUL" in line_upper and "UNFAITHFUL" not in line_upper
+        if line.strip().upper().startswith("REASON:"):
+            reason = line.strip()[len("REASON:"):].strip()
+
     return {"passed": passed, "reason": reason}

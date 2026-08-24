@@ -15,3 +15,5 @@ for r in results:
         print(f"   expected_keyword={r['expected_keyword']}, got={r.get('final_text')}")
         if r.get("judge_reason"):
             print(f"   judge_reason={r['judge_reason']}")
+        if r.get("faithfulness_reason"):
+            print(f"   faithfulness_reason={r['faithfulness_reason']}")
